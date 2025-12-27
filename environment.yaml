@@ -7,11 +7,12 @@ dependencies:
   # Core Python
   - python>=3.9,<3.12
 
-  # Django and web framework
+  # Web frameworks
   # Note: django>=4.2 is installed via pip (dj-database-url dependency)
   # Django 4.2 is LTS and works with our updated code
   - django-cors-headers>=4.0.0
   - gunicorn>=20.1.0
+  - flask>=2.0.0  # Backend HTTP server for frontend communication
 
   # Data science essentials
   - numpy>=1.25.0

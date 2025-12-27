@@ -9,8 +9,66 @@ import datetime
 import json
 import os
 
+import requests
 from django.http import HttpResponse, JsonResponse
 from django.shortcuts import render
+from django.views.decorators.csrf import csrf_exempt
+
+# Backend server URL
+BACKEND_URL = "http://127.0.0.1:5000"
+
+
+# =============================================================================
+# API Endpoints (New HTTP-based communication)
+# =============================================================================
+
+
+@csrf_exempt
+def api_movements(request):
+    """
+    Poll for pending movements from backend.
+    Frontend calls this to get movement data to animate.
+    Backend (CLI) drives simulation and queues movements.
+    """
+    try:
+        response = requests.get(f"{BACKEND_URL}/movements", timeout=5)
+        response.raise_for_status()
+        return JsonResponse(response.json())
+    except requests.Timeout:
+        return JsonResponse({"error": "Backend timeout"}, status=504)
+    except requests.ConnectionError:
+        return JsonResponse({"error": "Backend not running"}, status=502)
+    except requests.RequestException as e:
+        return JsonResponse({"error": str(e)}, status=502)
+
+
+def api_status(request):
+    """Get current simulation status from backend."""
+    try:
+        response = requests.get(f"{BACKEND_URL}/status", timeout=5)
+        response.raise_for_status()
+        return JsonResponse(response.json())
+    except requests.RequestException as e:
+        return JsonResponse({"error": str(e)}, status=502)
+
+
+@csrf_exempt
+def api_save(request):
+    """Save simulation state via backend."""
+    if request.method != "POST":
+        return JsonResponse({"error": "POST required"}, status=405)
+
+    try:
+        response = requests.post(f"{BACKEND_URL}/save", timeout=30)
+        response.raise_for_status()
+        return JsonResponse(response.json())
+    except requests.RequestException as e:
+        return JsonResponse({"error": str(e)}, status=502)
+
+
+# =============================================================================
+# Page Views
+# =============================================================================
 
 
 def landing(request):
@@ -252,63 +310,6 @@ def path_tester(request):
     context = {}
     template = "path_tester/path_tester.html"
     return render(request, template, context)
-
-
-def process_environment(request):
-    """
-    <FRONTEND to BACKEND>
-    This sends the frontend visual world information to the backend server.
-    It does this by writing the current environment representation to
-    "storage/environment.json" file.
-
-    ARGS:
-      request: Django request
-    RETURNS:
-      HttpResponse: string confirmation message.
-    """
-    # f_curr_sim_code = "temp_storage/curr_sim_code.json"
-    # with open(f_curr_sim_code) as json_file:
-    #   sim_code = json.load(json_file)["sim_code"]
-
-    data = json.loads(request.body)
-    step = data["step"]
-    sim_code = data["sim_code"]
-    environment = data["environment"]
-
-    with open(f"storage/runs/{sim_code}/environment/{step}.json", "w") as outfile:
-        outfile.write(json.dumps(environment, indent=2))
-
-    return HttpResponse("received")
-
-
-def update_environment(request):
-    """
-    <BACKEND to FRONTEND>
-    This sends the backend computation of the persona behavior to the frontend
-    visual server.
-    It does this by reading the new movement information from
-    "storage/movement.json" file.
-
-    ARGS:
-      request: Django request
-    RETURNS:
-      HttpResponse
-    """
-    # f_curr_sim_code = "temp_storage/curr_sim_code.json"
-    # with open(f_curr_sim_code) as json_file:
-    #   sim_code = json.load(json_file)["sim_code"]
-
-    data = json.loads(request.body)
-    step = data["step"]
-    sim_code = data["sim_code"]
-
-    response_data = {"<step>": -1}
-    if os.path.exists(f"storage/runs/{sim_code}/movement/{step}.json"):
-        with open(f"storage/runs/{sim_code}/movement/{step}.json") as json_file:
-            response_data = json.load(json_file)
-            response_data["<step>"] = step
-
-    return JsonResponse(response_data)
 
 
 def path_tester_update(request):

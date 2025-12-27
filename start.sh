@@ -23,8 +23,9 @@ echo "  Claudeville"
 echo "==========================================="
 echo ""
 
-# Kill any existing servers on port 8000
-lsof -ti:8000 | xargs kill -9 2>/dev/null || true
+# Kill any existing servers on our ports
+lsof -ti:8000 | xargs kill -9 2>/dev/null || true  # Django frontend
+lsof -ti:5000 | xargs kill -9 2>/dev/null || true  # Flask backend API
 
 # Check for conda/mamba
 if command -v mamba &> /dev/null; then
@@ -78,7 +79,8 @@ fi
 echo ""
 echo "==========================================="
 echo "  Frontend: http://localhost:8000"
-echo "  Backend:  Starting..."
+echo "  Backend API: http://localhost:5000"
+echo "  Backend CLI: Starting..."
 echo "==========================================="
 echo ""
 

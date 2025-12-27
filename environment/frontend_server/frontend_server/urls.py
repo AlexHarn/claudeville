@@ -19,6 +19,11 @@ from django.urls import path, re_path
 from translator import views as translator_views
 
 urlpatterns = [
+    # API endpoints (backend-driven simulation)
+    path("api/movements/", translator_views.api_movements, name="api_movements"),
+    path("api/status/", translator_views.api_status, name="api_status"),
+    path("api/save/", translator_views.api_save, name="api_save"),
+    # Page views
     re_path(r"^$", translator_views.landing, name="landing"),
     re_path(r"^simulator_home$", translator_views.home, name="home"),
     re_path(
@@ -35,16 +40,6 @@ urlpatterns = [
         r"^replay_persona_state/(?P<sim_code>[\w-]+)/(?P<step>[\w-]+)/(?P<persona_name>[\w-]+)/$",
         translator_views.replay_persona_state,
         name="replay_persona_state",
-    ),
-    re_path(
-        r"^process_environment/$",
-        translator_views.process_environment,
-        name="process_environment",
-    ),
-    re_path(
-        r"^update_environment/$",
-        translator_views.update_environment,
-        name="update_environment",
     ),
     re_path(r"^path_tester/$", translator_views.path_tester, name="path_tester"),
     re_path(
