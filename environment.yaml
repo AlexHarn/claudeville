@@ -59,6 +59,9 @@ dependencies:
     - pre-commit>=3.6.0
     - ruff>=0.1.9
 
+    # Claude Agent SDK (uses existing Claude Code auth)
+    - claude-agent-sdk>=0.1.0
+
 # Note: The following have been intentionally REMOVED:
 # - openai (replaced by Claude CLI)
 # - sentence-transformers (embeddings replaced by Sonnet retrieval)

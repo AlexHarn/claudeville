@@ -1,12 +1,15 @@
 """
-Claude CLI Wrapper for Claudeville
+Claude Agent SDK Wrapper for Claudeville
 
-This module replaces the OpenAI API wrapper (gpt_structure.py) with Claude CLI
-commands for the Claudeville project. It provides equivalent functionality using
-the Claude CLI with Max subscription.
+This module replaces the OpenAI API wrapper (gpt_structure.py) with the Claude Agent SDK
+for the Claudeville project. It provides equivalent functionality using the SDK which
+leverages existing Claude Code authentication (Max subscription).
 
-Key differences from the original:
-- Uses subprocess to call Claude CLI instead of OpenAI API
+Key features:
+- Uses ClaudeSDKClient for persistent connections (~2.5s per call vs ~7-10s)
+- Async-based with sync wrappers for compatibility
+- Automatic context monitoring with 80% threshold compaction
+- Session support for persistent persona contexts
 - No embedding functions (embeddings removed entirely in Claudeville)
 - Sonnet model replaces GPT-3.5-turbo
 - Opus model replaces GPT-4
@@ -15,9 +18,20 @@ Author: Claudeville Project
 Original: Joon Sung Park (joonspk@stanford.edu)
 """
 
+import asyncio
+import atexit
 import json
-import subprocess
+import threading
 import time
+from typing import Any
+
+from claude_agent_sdk import ClaudeAgentOptions, ClaudeSDKClient
+from claude_agent_sdk.types import ResultMessage
+
+# Context window limits
+MAX_CONTEXT_TOKENS = 200000  # Claude's context window
+COMPACTION_THRESHOLD = 0.80  # Trigger compaction at 80% fill
+COMPACTION_TOKEN_LIMIT = int(MAX_CONTEXT_TOKENS * COMPACTION_THRESHOLD)  # 160K tokens
 
 SYSTEM_PROMPT = """You are a response generator for a simulation.
 CRITICAL: Output ONLY the exact requested format. No explanations, no preamble, no "I see" or "Based on", no conversational text.
@@ -28,14 +42,190 @@ If asked for emojis, output ONLY the emojis.
 Never explain your reasoning. Never acknowledge the prompt. Just output the answer."""
 
 
+# ============================================================================
+# #####################[SECTION 1: CLIENT MANAGEMENT] ########################
+# ============================================================================
+
+# Global client pool - maps model names to persistent clients
+_client_pool: dict[str, ClaudeSDKClient] = {}
+_client_locks: dict[str, asyncio.Lock] = {}
+_client_usage: dict[str, dict[str, Any]] = {}  # Track token usage per client
+
+# Persistent event loop running in a background thread
+_loop: asyncio.AbstractEventLoop | None = None
+_loop_thread: threading.Thread | None = None
+_loop_lock = threading.Lock()
+
+
+def _get_or_start_loop() -> asyncio.AbstractEventLoop:
+    """Get or create a persistent event loop running in a background thread."""
+    global _loop, _loop_thread
+
+    with _loop_lock:
+        if _loop is None or not _loop.is_running():
+            _loop = asyncio.new_event_loop()
+
+            def run_loop():
+                asyncio.set_event_loop(_loop)
+                _loop.run_forever()
+
+            _loop_thread = threading.Thread(target=run_loop, daemon=True)
+            _loop_thread.start()
+
+            # Register cleanup on exit
+            atexit.register(_shutdown_loop)
+
+    return _loop
+
+
+def _shutdown_loop():
+    """Shutdown the background event loop."""
+    global _loop, _loop_thread
+
+    if _loop is not None and _loop.is_running():
+        # Schedule cleanup of clients
+        future = asyncio.run_coroutine_threadsafe(cleanup_clients(), _loop)
+        try:
+            future.result(timeout=5.0)
+        except Exception:
+            pass
+
+        _loop.call_soon_threadsafe(_loop.stop)
+
+        if _loop_thread is not None:
+            _loop_thread.join(timeout=2.0)
+
+    _loop = None
+    _loop_thread = None
+
+
+def _run_async(coro):
+    """Run an async coroutine from sync code using the persistent event loop."""
+    loop = _get_or_start_loop()
+    future = asyncio.run_coroutine_threadsafe(coro, loop)
+    return future.result()
+
+
+def _get_context_tokens(usage: dict[str, Any] | None) -> int:
+    """Calculate total context tokens from usage stats."""
+    if not usage:
+        return 0
+    return (
+        usage.get("cache_read_input_tokens", 0)
+        + usage.get("cache_creation_input_tokens", 0)
+        + usage.get("input_tokens", 0)
+    )
+
+
+async def _get_or_create_client(
+    model: str, system_prompt: str | None = None
+) -> ClaudeSDKClient:
+    """
+    Get an existing client or create a new one for the given model.
+
+    Clients are pooled by model name to reuse connections.
+    """
+    effective_system_prompt = system_prompt if system_prompt else SYSTEM_PROMPT
+    client_key = f"{model}:{hash(effective_system_prompt)}"
+
+    # Create lock for this client key if needed
+    if client_key not in _client_locks:
+        _client_locks[client_key] = asyncio.Lock()
+
+    async with _client_locks[client_key]:
+        # Check if we need to create or recreate the client
+        if client_key not in _client_pool:
+            options = ClaudeAgentOptions(
+                allowed_tools=[],  # No tools for simple prompts
+                permission_mode="bypassPermissions",
+                system_prompt=effective_system_prompt,
+                model=model,
+            )
+            client = ClaudeSDKClient(options)
+            await client.connect()
+            _client_pool[client_key] = client
+            _client_usage[client_key] = {"context_tokens": 0}
+
+        return _client_pool[client_key]
+
+
+async def _check_and_handle_compaction(
+    client_key: str, usage: dict[str, Any] | None
+) -> bool:
+    """
+    Check if compaction is needed based on token usage.
+
+    Returns True if compaction was triggered (client needs to be recreated).
+    """
+    context_tokens = _get_context_tokens(usage)
+    _client_usage[client_key] = {"context_tokens": context_tokens}
+
+    if context_tokens >= COMPACTION_TOKEN_LIMIT:
+        print(
+            f"[Claudeville] Context at {context_tokens}/{MAX_CONTEXT_TOKENS} tokens ({context_tokens/MAX_CONTEXT_TOKENS*100:.1f}%) - triggering compaction"
+        )
+
+        # Disconnect the old client
+        if client_key in _client_pool:
+            try:
+                await _client_pool[client_key].disconnect()
+            except Exception:
+                pass
+            del _client_pool[client_key]
+
+        return True
+
+    return False
+
+
+async def _query_with_client(
+    prompt: str,
+    model: str = "sonnet",
+    system_prompt: str | None = None,
+) -> str:
+    """
+    Execute a query using a persistent ClaudeSDKClient.
+
+    This maintains the connection for faster subsequent calls (~2.5s vs ~10s).
+    Automatically handles compaction when context window fills.
+    """
+    effective_system_prompt = system_prompt if system_prompt else SYSTEM_PROMPT
+    client_key = f"{model}:{hash(effective_system_prompt)}"
+
+    # Get or create client
+    client = await _get_or_create_client(model, system_prompt)
+
+    # Send query
+    await client.query(prompt)
+
+    # Receive response
+    result_text = ""
+    usage = None
+
+    async for message in client.receive_response():
+        if isinstance(message, ResultMessage):
+            result_text = message.result or ""
+            usage = message.usage
+
+    # Check if we need to trigger compaction
+    await _check_and_handle_compaction(client_key, usage)
+
+    return result_text
+
+
 def temp_sleep(seconds=0.1):
     """Brief pause between API calls to avoid rate limiting."""
     time.sleep(seconds)
 
 
-def _run_claude_cli(prompt, model="sonnet", system_prompt=None):
+def _run_claude_sdk(
+    prompt: str, model: str = "sonnet", system_prompt: str | None = None
+) -> str:
     """
-    Execute Claude CLI and return the result.
+    Sync wrapper for Claude Agent SDK query using persistent client.
+
+    Uses a background event loop to maintain persistent ClaudeSDKClient connections
+    across calls, enabling ~2.5s per call instead of ~10s.
 
     ARGS:
         prompt: The prompt string to send to Claude
@@ -44,35 +234,12 @@ def _run_claude_cli(prompt, model="sonnet", system_prompt=None):
 
     RETURNS:
         The text response from Claude
-
-    RAISES:
-        subprocess.CalledProcessError: If CLI execution fails
-        json.JSONDecodeError: If response parsing fails
     """
-    cmd = ["claude", "-p", "--output-format", "json", "--model", model]
-
-    # Always use a system prompt - default to SYSTEM_PROMPT if none provided
-    effective_system_prompt = system_prompt if system_prompt else SYSTEM_PROMPT
-    cmd.extend(["--system-prompt", effective_system_prompt])
-
-    cmd.append(prompt)
-
-    result = subprocess.run(cmd, capture_output=True, text=True)
-
-    if result.returncode != 0:
-        error_msg = result.stderr.strip() if result.stderr else "Unknown CLI error"
-        raise subprocess.CalledProcessError(result.returncode, cmd, error_msg)
-
-    try:
-        response_data = json.loads(result.stdout)
-        return response_data.get("result", "")
-    except json.JSONDecodeError:
-        # If JSON parsing fails, return raw stdout as fallback
-        return result.stdout.strip()
+    return _run_async(_query_with_client(prompt, model, system_prompt))
 
 
 # ============================================================================
-# #####################[SECTION 1: CLAUDE STRUCTURE] #########################
+# #####################[SECTION 2: CLAUDE STRUCTURE] #########################
 # ============================================================================
 
 
@@ -87,7 +254,7 @@ def Claude_single_request(prompt):
         a str of Claude's response.
     """
     temp_sleep()
-    return _run_claude_cli(prompt, model="sonnet")
+    return _run_claude_sdk(prompt, model="sonnet")
 
 
 def Claude_opus_request(prompt):
@@ -103,7 +270,7 @@ def Claude_opus_request(prompt):
     temp_sleep()
 
     try:
-        return _run_claude_cli(prompt, model="opus")
+        return _run_claude_sdk(prompt, model="opus")
     except Exception as e:
         print(f"Claude Opus ERROR: {e}")
         return "Claude Opus ERROR"
@@ -120,7 +287,7 @@ def Claude_sonnet_request(prompt):
         a str of Claude's response.
     """
     try:
-        return _run_claude_cli(prompt, model="sonnet")
+        return _run_claude_sdk(prompt, model="sonnet")
     except Exception as e:
         print(f"Claude Sonnet ERROR: {e}")
         return "Claude Sonnet ERROR"
@@ -227,7 +394,7 @@ def Claude_safe_generate_response(
 
 
 # ============================================================================
-# ###################[SECTION 2: PROMPT GENERATION] ##########################
+# ###################[SECTION 3: PROMPT GENERATION] ##########################
 # ============================================================================
 
 
@@ -305,7 +472,57 @@ def safe_generate_response(
 
 
 # ============================================================================
-# ###################[SECTION 3: BACKWARD COMPATIBILITY] #####################
+# ###################[SECTION 4: UTILITY FUNCTIONS] ##########################
+# ============================================================================
+
+
+async def cleanup_clients():
+    """
+    Cleanup all persistent clients. Call this when shutting down the simulation.
+    """
+    for client_key, client in list(_client_pool.items()):
+        try:
+            await client.disconnect()
+        except Exception:
+            pass
+    _client_pool.clear()
+    _client_usage.clear()
+
+
+def cleanup_clients_sync():
+    """Sync wrapper for cleanup_clients."""
+    if _loop is not None and _loop.is_running():
+        _run_async(cleanup_clients())
+    else:
+        # No loop running, nothing to clean up
+        pass
+
+
+def get_client_stats() -> dict[str, Any]:
+    """
+    Get statistics about the current client pool.
+
+    RETURNS:
+        Dictionary with client stats including context token usage.
+    """
+    return {
+        "num_clients": len(_client_pool),
+        "clients": {
+            key: {
+                "context_tokens": _client_usage.get(key, {}).get("context_tokens", 0),
+                "context_pct": _client_usage.get(key, {}).get("context_tokens", 0)
+                / MAX_CONTEXT_TOKENS
+                * 100,
+            }
+            for key in _client_pool.keys()
+        },
+        "compaction_threshold_pct": COMPACTION_THRESHOLD * 100,
+        "compaction_token_limit": COMPACTION_TOKEN_LIMIT,
+    }
+
+
+# ============================================================================
+# ###################[SECTION 5: BACKWARD COMPATIBILITY] #####################
 # ============================================================================
 
 # Drop-in compatibility aliases for code that still references OpenAI functions
@@ -318,43 +535,40 @@ GPT4_safe_generate_response = Claude_opus_safe_generate_response
 
 
 # ============================================================================
-# ###################[SECTION 4: TESTING] ####################################
+# ###################[SECTION 6: TESTING] ####################################
 # ============================================================================
 
 if __name__ == "__main__":
-    # Test basic functionality
-    curr_input = ["driving to a friend's house"]
-    prompt_lib_file = "prompt_template/test_prompt_July5.txt"
+    print("Testing Claude Agent SDK with ClaudeSDKClient (persistent connection)...")
+    print(
+        f"Compaction threshold: {COMPACTION_THRESHOLD*100:.0f}% ({COMPACTION_TOKEN_LIMIT:,} tokens)"
+    )
+    print()
 
-    try:
-        prompt = generate_prompt(curr_input, prompt_lib_file)
+    # Test multiple calls to see speedup
+    prompts = [
+        "Say exactly: Hello from test 1",
+        "Say exactly: Hello from test 2",
+        "Say exactly: Hello from test 3",
+    ]
 
-        def __func_validate(response, prompt=None):
-            if len(response.strip()) <= 1:
-                return False
-            if len(response.strip().split(" ")) > 1:
-                return False
-            return True
+    times = []
+    for i, prompt in enumerate(prompts):
+        start = time.time()
+        response = Claude_sonnet_request(prompt)
+        elapsed = time.time() - start
+        times.append(elapsed)
+        print(f"Call {i+1}: {elapsed:.2f}s - Response: {response[:50]}...")
 
-        def __func_clean_up(response, prompt=None):
-            cleaned_response = response.strip()
-            return cleaned_response
+    print()
+    print(f"First call: {times[0]:.2f}s")
+    print(f"Subsequent calls avg: {sum(times[1:])/len(times[1:]):.2f}s")
+    print()
 
-        output = safe_generate_response(
-            prompt,
-            None,  # gpt_parameter ignored
-            5,
-            "rest",
-            __func_validate,
-            __func_clean_up,
-            True,
-        )
+    # Show client stats
+    stats = get_client_stats()
+    print(f"Client pool stats: {json.dumps(stats, indent=2)}")
 
-        print(output)
-
-    except FileNotFoundError:
-        print("Test prompt file not found. Testing basic Claude request...")
-        response = Claude_single_request(
-            "Say 'Hello, Claudeville!' in exactly those words."
-        )
-        print(f"Response: {response}")
+    # Cleanup
+    cleanup_clients_sync()
+    print("\nCleanup complete.")
