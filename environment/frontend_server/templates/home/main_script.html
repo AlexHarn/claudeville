@@ -113,7 +113,8 @@
 	let timer = timer_max;
 
 	// <phase> -- there are three phases: "process," "update," and "execute."
-	let phase = "update"; // or "update" or "execute"
+	// Start in "process" to send current positions to backend first
+	let phase = "process";
 
 	// Variables for storing movements that are sent from the backend server.
 	let execute_movement;

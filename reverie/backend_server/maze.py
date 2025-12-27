@@ -10,8 +10,8 @@ world in a 2-dimensional matrix.
 import json
 import math
 
-from global_methods import read_file_to_list
 from utils import env_matrix
+from utils.file_utils import read_file_to_list
 
 
 class Maze:

@@ -7,8 +7,13 @@ Description: Compresses a simulation for replay demos.
 
 import json
 import shutil
+import sys
+from pathlib import Path
 
-from global_methods import create_folder_if_not_there, find_filenames
+# Add backend_server to path for utils import
+sys.path.insert(0, str(Path(__file__).parent / "backend_server"))
+
+from utils.file_utils import create_folder_if_not_there, find_filenames  # noqa: E402
 
 
 def compress(sim_code):

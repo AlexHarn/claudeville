@@ -7,9 +7,6 @@ Description: This defines the "Reflect" module for generative agents.
 """
 
 import datetime
-import sys
-
-sys.path.append("../../")
 
 from persona.cognitive_modules.retrieve import new_retrieve
 from persona.prompt_template.run_prompt import (

@@ -11,7 +11,6 @@ import os
 
 from django.http import HttpResponse, JsonResponse
 from django.shortcuts import render
-from global_methods import check_if_file_exists, find_filenames
 
 
 def landing(request):
@@ -113,7 +112,7 @@ def home(request):
     f_curr_sim_code = "temp_storage/curr_sim_code.json"
     f_curr_step = "temp_storage/curr_step.json"
 
-    if not check_if_file_exists(f_curr_step):
+    if not os.path.exists(f_curr_step):
         context = {}
         template = "home/error_start_backend.html"
         return render(request, template, context)
@@ -128,19 +127,20 @@ def home(request):
 
     persona_names = []
     persona_names_set = set()
-    for i in find_filenames(f"storage/runs/{sim_code}/personas", ""):
-        x = i.split("/")[-1].strip()
-        if x[0] != ".":
-            persona_names += [[x, x.replace(" ", "_")]]
+    personas_dir = f"storage/runs/{sim_code}/personas"
+    for x in os.listdir(personas_dir):
+        if not x.startswith("."):
+            persona_names.append([x, x.replace(" ", "_")])
             persona_names_set.add(x)
 
     persona_init_pos = []
-    file_count = []
-    for i in find_filenames(f"storage/runs/{sim_code}/environment", ".json"):
-        x = i.split("/")[-1].strip()
-        if x[0] != ".":
-            file_count += [int(x.split(".")[0])]
-    curr_json = f"storage/runs/{sim_code}/environment/{str(max(file_count))}.json"
+    env_dir = f"storage/runs/{sim_code}/environment"
+    file_count = [
+        int(f.split(".")[0])
+        for f in os.listdir(env_dir)
+        if f.endswith(".json") and not f.startswith(".")
+    ]
+    curr_json = f"{env_dir}/{max(file_count)}.json"
     with open(curr_json) as json_file:
         persona_init_pos_dict = json.load(json_file)
         for key, val in persona_init_pos_dict.items():
@@ -164,19 +164,20 @@ def replay(request, sim_code, step):
 
     persona_names = []
     persona_names_set = set()
-    for i in find_filenames(f"storage/runs/{sim_code}/personas", ""):
-        x = i.split("/")[-1].strip()
-        if x[0] != ".":
-            persona_names += [[x, x.replace(" ", "_")]]
+    personas_dir = f"storage/runs/{sim_code}/personas"
+    for x in os.listdir(personas_dir):
+        if not x.startswith("."):
+            persona_names.append([x, x.replace(" ", "_")])
             persona_names_set.add(x)
 
     persona_init_pos = []
-    file_count = []
-    for i in find_filenames(f"storage/runs/{sim_code}/environment", ".json"):
-        x = i.split("/")[-1].strip()
-        if x[0] != ".":
-            file_count += [int(x.split(".")[0])]
-    curr_json = f"storage/runs/{sim_code}/environment/{str(max(file_count))}.json"
+    env_dir = f"storage/runs/{sim_code}/environment"
+    file_count = [
+        int(f.split(".")[0])
+        for f in os.listdir(env_dir)
+        if f.endswith(".json") and not f.startswith(".")
+    ]
+    curr_json = f"{env_dir}/{max(file_count)}.json"
     with open(curr_json) as json_file:
         persona_init_pos_dict = json.load(json_file)
         for key, val in persona_init_pos_dict.items():
@@ -302,7 +303,7 @@ def update_environment(request):
     sim_code = data["sim_code"]
 
     response_data = {"<step>": -1}
-    if check_if_file_exists(f"storage/runs/{sim_code}/movement/{step}.json"):
+    if os.path.exists(f"storage/runs/{sim_code}/movement/{step}.json"):
         with open(f"storage/runs/{sim_code}/movement/{step}.json") as json_file:
             response_data = json.load(json_file)
             response_data["<step>"] = step

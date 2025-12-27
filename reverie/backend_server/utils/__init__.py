@@ -1,4 +1,5 @@
-# Claudeville Configuration
+# Claudeville Utils Package
+# Configuration and utility functions
 
 # Asset paths
 maze_assets_loc = "../../environment/frontend_server/static_dirs/assets"
@@ -20,3 +21,5 @@ fs_storage = fs_storage_runs
 # Simulation settings
 collision_block_id = "32125"  # Tile ID for collision detection in maze pathfinding
 debug = True
+
+# Re-export CSV utility for convenience

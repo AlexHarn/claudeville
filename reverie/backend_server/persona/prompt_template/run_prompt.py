@@ -13,9 +13,6 @@ import json
 import random
 import re
 import string
-import sys
-
-sys.path.append("../../")
 
 from utils import debug
 

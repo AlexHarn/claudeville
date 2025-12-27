@@ -6,10 +6,6 @@ File: retrieve.py
 Description: This defines the "Retrieve" module for generative agents.
 """
 
-import sys
-
-sys.path.append("../../")
-
 
 def retrieve(persona, perceived):
     """

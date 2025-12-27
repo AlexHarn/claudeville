@@ -11,9 +11,6 @@ agents paper.
 
 import datetime
 import json
-import sys
-
-sys.path.append("../../")
 
 
 class ConceptNode:

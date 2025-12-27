@@ -9,9 +9,6 @@ Description: This defines the "Plan" module for generative agents.
 import datetime
 import math
 import random
-import sys
-
-sys.path.append("../../")
 
 from persona.cognitive_modules.converse import agent_chat_v2
 from persona.cognitive_modules.retrieve import new_retrieve

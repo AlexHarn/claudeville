@@ -15,7 +15,6 @@ import time
 import traceback
 
 import cli_interface as cli
-from global_methods import check_if_file_exists, copyanything
 from maze import Maze
 from utils import (
     debug,
@@ -48,7 +47,8 @@ class ReverieServer:
         # <sim_code> indicates our current simulation. Runs always go to storage/runs/
         self.sim_code = sim_code
         sim_folder = f"{fs_storage_runs}/{self.sim_code}"
-        copyanything(fork_folder, sim_folder)
+        if not os.path.exists(sim_folder):
+            shutil.copytree(fork_folder, sim_folder)
 
         # Create movement folder for this run (not in base template)
         os.makedirs(f"{sim_folder}/movement", exist_ok=True)
@@ -226,7 +226,7 @@ class ReverieServer:
             try:
                 curr_dict = {}
                 tester_file = fs_temp_storage + "/path_tester_env.json"
-                if check_if_file_exists(tester_file):
+                if os.path.exists(tester_file):
                     with open(tester_file) as json_file:
                         curr_dict = json.load(json_file)
                         os.remove(tester_file)
@@ -318,7 +318,7 @@ class ReverieServer:
             # new environment file that matches our step count. That's when we run
             # the content of this for loop. Otherwise, we just wait.
             curr_env_file = f"{sim_folder}/environment/{self.step}.json"
-            if check_if_file_exists(curr_env_file):
+            if os.path.exists(curr_env_file):
                 # If we have an environment file, it means we have a new perception
                 # input to our personas. So we first retrieve it.
                 try:

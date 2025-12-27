@@ -8,11 +8,7 @@ Description: Defines the short-term memory module for generative agents.
 
 import datetime
 import json
-import sys
-
-sys.path.append("../../")
-
-from global_methods import check_if_file_exists
+import os
 
 
 class Scratch:
@@ -162,7 +158,7 @@ class Scratch:
         # e.g., [(50, 10), (49, 10), (48, 10), ...]
         self.planned_path = []
 
-        if check_if_file_exists(f_saved):
+        if os.path.exists(f_saved):
             # If we have a bootstrap file, load that here.
             scratch_load = json.load(open(f_saved))
 

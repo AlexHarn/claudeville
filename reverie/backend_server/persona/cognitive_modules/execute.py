@@ -7,11 +7,8 @@ Description: This defines the "Act" module for generative agents.
 """
 
 import random
-import sys
 
-sys.path.append("../../")
-
-from path_finder import path_finder
+from path_finder import PathFinder  # noqa: F821
 from utils import collision_block_id
 
 
@@ -41,6 +38,9 @@ def execute(persona, maze, personas, plan):
     # <act_path_set> is set to True if the path is set for the current action.
     # It is False otherwise, and means we need to construct a new path.
     if not persona.scratch.act_path_set:
+        # Create PathFinder instance for this maze
+        path_finder = PathFinder(maze.collision_maze, collision_block_id)
+
         # <target_tiles> is a list of tile coordinates where the persona may go
         # to execute the current action. The goal is to pick one of them.
         target_tiles = None
@@ -50,26 +50,20 @@ def execute(persona, maze, personas, plan):
             target_p_tile = personas[
                 plan.split("<persona>")[-1].strip()
             ].scratch.curr_tile
-            potential_path = path_finder(
-                maze.collision_maze,
+            potential_path = path_finder.find_path(
                 persona.scratch.curr_tile,
                 target_p_tile,
-                collision_block_id,
             )
             if len(potential_path) <= 2:
                 target_tiles = [potential_path[0]]
             else:
-                potential_1 = path_finder(
-                    maze.collision_maze,
+                potential_1 = path_finder.find_path(
                     persona.scratch.curr_tile,
                     potential_path[int(len(potential_path) / 2)],
-                    collision_block_id,
                 )
-                potential_2 = path_finder(
-                    maze.collision_maze,
+                potential_2 = path_finder.find_path(
                     persona.scratch.curr_tile,
                     potential_path[int(len(potential_path) / 2) + 1],
-                    collision_block_id,
                 )
                 if len(potential_1) <= len(potential_2):
                     target_tiles = [potential_path[int(len(potential_path) / 2)]]
@@ -126,21 +120,11 @@ def execute(persona, maze, personas, plan):
         target_tiles = new_target_tiles
 
         # Now that we've identified the target tile, we find the shortest path to
-        # one of the target tiles.
+        # one of the target tiles using PathFinder.find_path_to_nearest.
         curr_tile = persona.scratch.curr_tile
-        closest_target_tile = None
-        path = None
-        for i in target_tiles:
-            # path_finder takes a collision_mze and the curr_tile coordinate as
-            # an input, and returns a list of coordinate tuples that becomes the
-            # path.
-            # e.g., [(0, 1), (1, 1), (1, 2), (1, 3), (1, 4)...]
-            curr_path = path_finder(
-                maze.collision_maze, curr_tile, i, collision_block_id
-            )
-            if not closest_target_tile or len(curr_path) < len(path):
-                closest_target_tile = i
-                path = curr_path
+        path, closest_target_tile = path_finder.find_path_to_nearest(
+            curr_tile, target_tiles
+        )
 
         # Actually setting the <planned_path> and <act_path_set>. We cut the
         # first element in the planned_path because it includes the curr_tile.

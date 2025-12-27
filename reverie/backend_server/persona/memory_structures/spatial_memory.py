@@ -8,17 +8,13 @@ memory that aids in grounding their behavior in the game world.
 """
 
 import json
-import sys
-
-sys.path.append("../../")
-
-from global_methods import check_if_file_exists
+import os
 
 
 class MemoryTree:
     def __init__(self, f_saved):
         self.tree = {}
-        if check_if_file_exists(f_saved):
+        if os.path.exists(f_saved):
             self.tree = json.load(open(f_saved))
 
     def print_tree(self):

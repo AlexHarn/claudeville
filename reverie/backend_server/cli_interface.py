@@ -139,7 +139,7 @@ def print_help():
     )
     print(
         c("│", Colors.BRIGHT_BLACK)
-        + f"    {c('exit', Colors.RED)}              Exit without saving"
+        + f"    {c('quit', Colors.RED)}              Exit without saving"
     )
     print(c("│", Colors.BRIGHT_BLACK))
     print(
@@ -307,7 +307,7 @@ def get_prompt():
             c("claudeville", Colors.CYAN, Colors.BOLD) + c(" ▸ ", Colors.BRIGHT_BLACK)
         ).strip()
     except EOFError:
-        return "exit"
+        return "quit"
     except KeyboardInterrupt:
         print()
         return ""

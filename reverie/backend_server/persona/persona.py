@@ -10,10 +10,6 @@ the term we used internally back in 2022, taking from our Social Simulacra
 paper.
 """
 
-import sys
-
-sys.path.append("../")
-
 from persona.cognitive_modules.converse import open_convo_session
 from persona.cognitive_modules.execute import execute
 from persona.cognitive_modules.perceive import perceive

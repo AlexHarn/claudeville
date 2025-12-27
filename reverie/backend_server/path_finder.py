@@ -3,248 +3,275 @@ Original Author: Joon Sung Park (joonspk@stanford.edu)
 Heavily modified for Claudeville (Claude CLI port)
 
 File: path_finder.py
-Description: Implements various path finding functions for generative agents.
-Some of the functions are defunct.
+Description: Implements PathFinder class for generative agents path finding.
 """
+
+from typing import Optional
 
 import numpy as np
 
 
-def print_maze(maze):
-    for row in maze:
-        for item in row:
-            print(item, end="")
-        print()
+class PathFinder:
+    """
+    A path finding utility class for navigating maze environments.
 
+    Uses a breadth-first wave propagation algorithm to find shortest paths
+    between points while avoiding collision blocks.
+    """
 
-def path_finder_v1(maze, start, end, collision_block_char, verbose=False):
-    def prepare_maze(maze, start, end):
-        maze[start[0]][start[1]] = "S"
-        maze[end[0]][end[1]] = "E"
-        return maze
+    def __init__(self, maze: list, collision_block_id: str):
+        """
+        Initialize PathFinder with a maze and collision block identifier.
 
-    def find_start(maze):
-        for row in range(len(maze)):
-            for col in range(len(maze[0])):
-                if maze[row][col] == "S":
-                    return row, col
+        Args:
+            maze: 2D list representing the maze grid
+            collision_block_id: Character/value identifying impassable blocks
+        """
+        self.maze = maze
+        self.collision_block_id = collision_block_id
 
-    def is_valid_position(maze, pos_r, pos_c):
-        if pos_r < 0 or pos_c < 0:
+    def find_path(self, start: tuple, end: tuple) -> list:
+        """
+        Find the shortest path from start to end coordinates.
+
+        Uses wave propagation (BFS) algorithm for shortest path.
+        Coordinates are in (x, y) format and internally converted.
+
+        Args:
+            start: Starting coordinate as (x, y) tuple
+            end: Ending coordinate as (x, y) tuple
+
+        Returns:
+            List of (x, y) coordinate tuples forming the path from start to end.
+            Returns path with just the start if no path exists.
+        """
+        # Convert from (x, y) to internal (row, col) format
+        internal_start = (start[1], start[0])
+        internal_end = (end[1], end[0])
+
+        path = self._find_path_internal(internal_start, internal_end)
+
+        # Convert back to (x, y) format
+        return [(coord[1], coord[0]) for coord in path]
+
+    def find_path_to_nearest(self, start: tuple, targets: list) -> tuple:
+        """
+        Find the path to the nearest target from a list of targets.
+
+        Args:
+            start: Starting coordinate as (x, y) tuple
+            targets: List of potential target coordinates as (x, y) tuples
+
+        Returns:
+            Tuple of (path, target_reached) where path is the list of coordinates
+            and target_reached is the coordinate that was reached.
+            Returns ([], None) if no valid targets.
+        """
+        if not targets:
+            return ([], None)
+
+        closest_target = None
+        shortest_path = None
+
+        for target in targets:
+            path = self.find_path(start, target)
+            if shortest_path is None or len(path) < len(shortest_path):
+                shortest_path = path
+                closest_target = target
+
+        return (shortest_path, closest_target)
+
+    def _is_valid_position(self, row: int, col: int) -> bool:
+        """
+        Check if a position is valid (within bounds and not a collision block).
+
+        Args:
+            row: Row index in the maze
+            col: Column index in the maze
+
+        Returns:
+            True if position is valid for traversal, False otherwise
+        """
+        if row < 0 or col < 0:
             return False
-        if pos_r >= len(maze) or pos_c >= len(maze[0]):
+        if row >= len(self.maze) or col >= len(self.maze[0]):
             return False
-        if maze[pos_r][pos_c] in " E":
-            return True
-        return False
+        return self.maze[row][col] != self.collision_block_id
 
-    def solve_maze(maze, start, verbose=False):
-        path = []
-        # We use a Python list as a stack - then we have push operations as
-        # append, and pop as pop.
-        stack = []
-        # Add the entry point (as a tuple)
-        stack.append(start)
-        # Go through the stack as long as there are elements
-        while len(stack) > 0:
-            pos_r, pos_c = stack.pop()
-            if verbose:
-                print("Current position", pos_r, pos_c)
-            if maze[pos_r][pos_c] == "E":
-                path += [(pos_r, pos_c)]
-                return path
-            if maze[pos_r][pos_c] == "X":
-                # Already visited
-                continue
-            # Mark position as visited
-            maze[pos_r][pos_c] = "X"
-            path += [(pos_r, pos_c)]
-            # Check for all possible positions and add if possible
-            if is_valid_position(maze, pos_r - 1, pos_c):
-                stack.append((pos_r - 1, pos_c))
-            if is_valid_position(maze, pos_r + 1, pos_c):
-                stack.append((pos_r + 1, pos_c))
-            if is_valid_position(maze, pos_r, pos_c - 1):
-                stack.append((pos_r, pos_c - 1))
-            if is_valid_position(maze, pos_r, pos_c + 1):
-                stack.append((pos_r, pos_c + 1))
+    def _find_path_internal(self, start: tuple, end: tuple) -> list:
+        """
+        Internal path finding using wave propagation algorithm.
 
-            # To follow the maze
-            if verbose:
-                print("Stack:", stack)
-                print_maze(maze)
+        Args:
+            start: Starting coordinate as (row, col) tuple
+            end: Ending coordinate as (row, col) tuple
 
-        # We didn't find a path, hence we do not need to return the path
-        return False
+        Returns:
+            List of (row, col) coordinate tuples forming the path
+        """
+        # Build collision map (1 = blocked, 0 = passable)
+        collision_map = []
+        for row in self.maze:
+            new_row = []
+            for cell in row:
+                if cell == self.collision_block_id:
+                    new_row.append(1)
+                else:
+                    new_row.append(0)
+            collision_map.append(new_row)
 
-    # clean maze
-    new_maze = []
-    for row in maze:
-        new_row = []
-        for j in row:
-            if j == collision_block_char:
-                new_row += ["#"]
+        # Initialize distance map
+        distance_map = []
+        for i in range(len(collision_map)):
+            distance_map.append([0] * len(collision_map[i]))
+
+        # Set starting position
+        start_row, start_col = start
+        distance_map[start_row][start_col] = 1
+
+        # Wave propagation with iteration limit
+        step = 0
+        max_iterations = 150
+        while distance_map[end[0]][end[1]] == 0 and step < max_iterations:
+            step += 1
+            self._propagate_wave(collision_map, distance_map, step)
+
+        # Trace path back from end to start
+        row, col = end
+        current_distance = distance_map[row][col]
+        path = [(row, col)]
+
+        while current_distance > 1:
+            # Check all four directions for the previous step
+            if row > 0 and distance_map[row - 1][col] == current_distance - 1:
+                row = row - 1
+                path.append((row, col))
+                current_distance -= 1
+            elif col > 0 and distance_map[row][col - 1] == current_distance - 1:
+                col = col - 1
+                path.append((row, col))
+                current_distance -= 1
+            elif (
+                row < len(distance_map) - 1
+                and distance_map[row + 1][col] == current_distance - 1
+            ):
+                row = row + 1
+                path.append((row, col))
+                current_distance -= 1
+            elif (
+                col < len(distance_map[row]) - 1
+                and distance_map[row][col + 1] == current_distance - 1
+            ):
+                col = col + 1
+                path.append((row, col))
+                current_distance -= 1
             else:
-                new_row += [" "]
-        new_maze += [new_row]
+                # No valid path found
+                break
 
-    maze = new_maze
+        path.reverse()
+        return path
 
-    maze = prepare_maze(maze, start, end)
-    start = find_start(maze)
-    path = solve_maze(maze, start, verbose)
-    return path
+    def _propagate_wave(
+        self, collision_map: list, distance_map: list, step: int
+    ) -> None:
+        """
+        Propagate the distance wave one step outward.
 
+        Args:
+            collision_map: 2D list where 1 = blocked, 0 = passable
+            distance_map: 2D list of distances from start
+            step: Current step number in wave propagation
+        """
+        for i in range(len(distance_map)):
+            for j in range(len(distance_map[i])):
+                if distance_map[i][j] == step:
+                    # Propagate to adjacent unvisited, passable cells
+                    if (
+                        i > 0
+                        and distance_map[i - 1][j] == 0
+                        and collision_map[i - 1][j] == 0
+                    ):
+                        distance_map[i - 1][j] = step + 1
+                    if (
+                        j > 0
+                        and distance_map[i][j - 1] == 0
+                        and collision_map[i][j - 1] == 0
+                    ):
+                        distance_map[i][j - 1] = step + 1
+                    if (
+                        i < len(distance_map) - 1
+                        and distance_map[i + 1][j] == 0
+                        and collision_map[i + 1][j] == 0
+                    ):
+                        distance_map[i + 1][j] = step + 1
+                    if (
+                        j < len(distance_map[i]) - 1
+                        and distance_map[i][j + 1] == 0
+                        and collision_map[i][j + 1] == 0
+                    ):
+                        distance_map[i][j + 1] = step + 1
 
-def path_finder_v2(a, start, end, collision_block_char, verbose=False):
-    def make_step(m, k):
-        for i in range(len(m)):
-            for j in range(len(m[i])):
-                if m[i][j] == k:
-                    if i > 0 and m[i - 1][j] == 0 and a[i - 1][j] == 0:
-                        m[i - 1][j] = k + 1
-                    if j > 0 and m[i][j - 1] == 0 and a[i][j - 1] == 0:
-                        m[i][j - 1] = k + 1
-                    if i < len(m) - 1 and m[i + 1][j] == 0 and a[i + 1][j] == 0:
-                        m[i + 1][j] = k + 1
-                    if j < len(m[i]) - 1 and m[i][j + 1] == 0 and a[i][j + 1] == 0:
-                        m[i][j + 1] = k + 1
+    @staticmethod
+    def closest_coordinate(curr: tuple, target_list: list) -> Optional[tuple]:
+        """
+        Find the closest coordinate from a list of targets using Euclidean distance.
 
-    new_maze = []
-    for row in a:
-        new_row = []
-        for j in row:
-            if j == collision_block_char:
-                new_row += [1]
-            else:
-                new_row += [0]
-        new_maze += [new_row]
-    a = new_maze
+        Args:
+            curr: Current coordinate as (x, y) tuple
+            target_list: List of target coordinates as (x, y) tuples
 
-    m = []
-    for i in range(len(a)):
-        m.append([])
-        for j in range(len(a[i])):
-            m[-1].append(0)
-    i, j = start
-    m[i][j] = 1
+        Returns:
+            The closest coordinate tuple, or None if target_list is empty
+        """
+        if not target_list:
+            return None
 
-    k = 0
-    except_handle = 150
-    while m[end[0]][end[1]] == 0:
-        k += 1
-        make_step(m, k)
+        min_dist = None
+        closest = None
 
-        if except_handle == 0:
-            break
-        except_handle -= 1
+        for coordinate in target_list:
+            a = np.array(coordinate)
+            b = np.array(curr)
+            dist = float(np.linalg.norm(a - b))
+            if closest is None or dist < min_dist:
+                min_dist = dist
+                closest = coordinate
 
-    i, j = end
-    k = m[i][j]
-    the_path = [(i, j)]
-    while k > 1:
-        if i > 0 and m[i - 1][j] == k - 1:
-            i, j = i - 1, j
-            the_path.append((i, j))
-            k -= 1
-        elif j > 0 and m[i][j - 1] == k - 1:
-            i, j = i, j - 1
-            the_path.append((i, j))
-            k -= 1
-        elif i < len(m) - 1 and m[i + 1][j] == k - 1:
-            i, j = i + 1, j
-            the_path.append((i, j))
-            k -= 1
-        elif j < len(m[i]) - 1 and m[i][j + 1] == k - 1:
-            i, j = i, j + 1
-            the_path.append((i, j))
-            k -= 1
-
-    the_path.reverse()
-    return the_path
+        return closest
 
 
+# Backwards compatibility wrapper for existing code
 def path_finder(maze, start, end, collision_block_char, verbose=False):
-    # EMERGENCY PATCH
-    start = (start[1], start[0])
-    end = (end[1], end[0])
-    # END EMERGENCY PATCH
+    """
+    Legacy wrapper function for backwards compatibility.
 
-    path = path_finder_v2(maze, start, end, collision_block_char, verbose)
+    Args:
+        maze: 2D list representing the maze grid
+        start: Starting coordinate as (x, y) tuple
+        end: Ending coordinate as (x, y) tuple
+        collision_block_char: Character identifying impassable blocks
+        verbose: Unused, kept for API compatibility
 
-    new_path = []
-    for i in path:
-        new_path += [(i[1], i[0])]
-    path = new_path
-
-    return path
+    Returns:
+        List of (x, y) coordinate tuples forming the path
+    """
+    pf = PathFinder(maze, collision_block_char)
+    return pf.find_path(start, end)
 
 
 def closest_coordinate(curr_coordinate, target_coordinates):
-    min_dist = None
-    closest_coordinate = None
-    for coordinate in target_coordinates:
-        a = np.array(coordinate)
-        b = np.array(curr_coordinate)
-        dist = abs(np.linalg.norm(a - b))
-        if not closest_coordinate:
-            min_dist = dist
-            closest_coordinate = coordinate
-        else:
-            if min_dist > dist:
-                min_dist = dist
-                closest_coordinate = coordinate
+    """
+    Legacy wrapper function for backwards compatibility.
 
-    return closest_coordinate
+    Args:
+        curr_coordinate: Current coordinate as (x, y) tuple
+        target_coordinates: List of target coordinates as (x, y) tuples
 
-
-def path_finder_2(maze, start, end, collision_block_char, verbose=False):
-    # start => persona_a
-    # end => persona_b
-    start = list(start)
-    end = list(end)
-
-    t_top = (end[0], end[1] + 1)
-    t_bottom = (end[0], end[1] - 1)
-    t_left = (end[0] - 1, end[1])
-    t_right = (end[0] + 1, end[1])
-    pot_target_coordinates = [t_top, t_bottom, t_left, t_right]
-
-    maze_width = len(maze[0])
-    maze_height = len(maze)
-    target_coordinates = []
-    for coordinate in pot_target_coordinates:
-        if (
-            coordinate[0] >= 0
-            and coordinate[0] < maze_width
-            and coordinate[1] >= 0
-            and coordinate[1] < maze_height
-        ):
-            target_coordinates += [coordinate]
-
-    target_coordinate = closest_coordinate(start, target_coordinates)
-
-    path = path_finder(
-        maze, start, target_coordinate, collision_block_char, verbose=False
-    )
-    return path
-
-
-def path_finder_3(maze, start, end, collision_block_char, verbose=False):
-    # start => persona_a
-    # end => persona_b
-
-    curr_path = path_finder(maze, start, end, collision_block_char, verbose=False)
-    if len(curr_path) <= 2:
-        return []
-    else:
-        a_path = curr_path[: int(len(curr_path) / 2)]
-        b_path = curr_path[int(len(curr_path) / 2) - 1 :]
-    b_path.reverse()
-
-    print(a_path)
-    print(b_path)
-    return a_path, b_path
+    Returns:
+        The closest coordinate tuple, or None if empty
+    """
+    return PathFinder.closest_coordinate(curr_coordinate, target_coordinates)
 
 
 if __name__ == "__main__":
@@ -258,20 +285,31 @@ if __name__ == "__main__":
         ["#", " ", " ", " ", " ", " ", " ", " ", " ", " ", "#", " ", " "],
         ["#", "#", "#", "#", "#", "#", "#", "#", "#", "#", "#", "#", "#"],
     ]
+
+    # Test PathFinder class
+    pf = PathFinder(maze, "#")
+
+    print("Test 1: Same start and end")
     start = (0, 1)
     end = (0, 1)
-    print(path_finder(maze, start, end, "#"))
+    print(pf.find_path(start, end))
 
-    print("-===")
+    print("\nTest 2: Path finding")
     start = (0, 1)
     end = (11, 4)
-    print(path_finder_2(maze, start, end, "#"))
+    print(pf.find_path(start, end))
 
-    print("-===")
+    print("\nTest 3: Find path to nearest")
     start = (0, 1)
-    end = (12, 6)
-    print(path_finder_3(maze, start, end, "#"))
+    targets = [(11, 4), (12, 6), (5, 3)]
+    path, target = pf.find_path_to_nearest(start, targets)
+    print(f"Path: {path}")
+    print(f"Target reached: {target}")
 
-    print("-===")
-    path_finder_3(maze, start, end, "#")[0]
-    path_finder_3(maze, start, end, "#")[1]
+    print("\nTest 4: Closest coordinate")
+    curr = (0, 1)
+    coords = [(11, 4), (12, 6), (5, 3)]
+    print(PathFinder.closest_coordinate(curr, coords))
+
+    print("\nTest 5: Legacy wrapper compatibility")
+    print(path_finder(maze, (0, 1), (11, 4), "#"))

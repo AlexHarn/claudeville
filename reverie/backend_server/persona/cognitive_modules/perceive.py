@@ -7,10 +7,6 @@ Description: This defines the "Perceive" module for generative agents.
 """
 
 import math
-import sys
-
-sys.path.append("../../")
-
 from operator import itemgetter
 
 from persona.prompt_template.run_prompt import (

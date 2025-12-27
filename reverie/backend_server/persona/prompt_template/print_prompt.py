@@ -6,14 +6,8 @@ File: print_prompt.py
 Description: For printing prompts when the setting for verbose is set to True.
 """
 
-import os
-import sys
-
-sys.path.append("../")
-
 # Import cli_interface if available for colored output
 try:
-    sys.path.append(os.path.join(os.path.dirname(__file__), "../.."))
     import cli_interface as cli
 
     HAS_CLI = True
