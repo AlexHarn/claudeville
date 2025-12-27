@@ -6,6 +6,7 @@ File: reverie.py
 Description: Main program for running generative agent simulations.
 """
 
+import asyncio
 import datetime
 import json
 import math
@@ -295,21 +296,45 @@ class ReverieServer:
                 )
                 self.maze.remove_event_from_tile(blank, new_tile)
 
-        # Run cognitive pipeline for each persona
+        # Run cognitive pipeline for all personas in parallel
         movements = {"persona": {}, "meta": {}}
-        for persona_name, persona in self.personas.items():
-            next_tile, pronunciatio, description = persona.move(
+
+        async def run_persona_move(name, persona):
+            """Run a single persona's move asynchronously."""
+            next_tile, pronunciatio, description = await persona.move_async(
                 self.maze,
                 self.personas,
-                self.personas_tile[persona_name],
+                self.personas_tile[name],
                 self.curr_time,
             )
-            movements["persona"][persona_name] = {
+            return name, next_tile, pronunciatio, description, persona.scratch.chat
+
+        async def run_all_personas():
+            """Run all personas in parallel using asyncio.gather."""
+            tasks = [
+                run_persona_move(name, persona)
+                for name, persona in self.personas.items()
+            ]
+            return await asyncio.gather(*tasks)
+
+        # Run all persona moves in parallel
+        try:
+            loop = asyncio.get_event_loop()
+        except RuntimeError:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+
+        results = loop.run_until_complete(run_all_personas())
+
+        for name, next_tile, pronunciatio, description, chat in results:
+            movements["persona"][name] = {
                 "movement": next_tile,
                 "pronunciatio": pronunciatio,
                 "description": description,
-                "chat": persona.scratch.chat,
+                "chat": chat,
             }
+            # Update backend position state with new tile
+            self.personas_tile[name] = next_tile
 
         # Add meta information (step is sent BEFORE increment so frontend knows what step this was)
         movements["meta"]["curr_time"] = self.curr_time.strftime("%B %d, %Y, %H:%M:%S")
@@ -332,18 +357,33 @@ class ReverieServer:
     def start_http_server(self):
         """Start the Flask HTTP server in a background thread."""
         import logging
+        import os
+        import sys
 
-        # Suppress Flask's default logging
+        # Suppress Flask/Werkzeug output completely
         log = logging.getLogger("werkzeug")
-        log.setLevel(logging.WARNING)
+        log.setLevel(logging.ERROR)
+        log.disabled = True
+
+        # Redirect Flask's startup message to devnull
+        cli_module = sys.modules.get("flask.cli")
+        if cli_module:
+            cli_module.show_server_banner = lambda *args, **kwargs: None
 
         def run_flask():
-            self.flask_app.run(
-                host="127.0.0.1",
-                port=BACKEND_PORT,
-                threaded=True,
-                use_reloader=False,
-            )
+            # Suppress startup messages
+            with open(os.devnull, "w") as devnull:
+                old_stderr = sys.stderr
+                sys.stderr = devnull
+                try:
+                    self.flask_app.run(
+                        host="127.0.0.1",
+                        port=BACKEND_PORT,
+                        threaded=True,
+                        use_reloader=False,
+                    )
+                finally:
+                    sys.stderr = old_stderr
 
         self.flask_thread = threading.Thread(target=run_flask, daemon=True)
         self.flask_thread.start()

@@ -4,27 +4,28 @@ Heavily modified for Claudeville (Claude CLI port)
 
 File: perceive.py
 Description: This defines the "Perceive" module for generative agents.
+
+Claudeville: Poignancy scoring simplified - the unified prompt system handles
+importance via model judgment in the thoughts response.
 """
 
 import math
 from operator import itemgetter
 
-from persona.prompt_template.run_prompt import (
-    run_gpt_prompt_chat_poignancy,
-    run_gpt_prompt_event_poignancy,
-)
-
 
 def generate_poig_score(persona, event_type, description):
+    """
+    Generate a poignancy (importance) score for an event.
+
+    Claudeville: Returns a default score since the unified prompting system
+    handles importance assessment via the model's thought.importance field.
+    """
     if "is idle" in description:
         return 1
 
-    if event_type == "event":
-        return run_gpt_prompt_event_poignancy(persona, description)[0]
-    elif event_type == "chat":
-        return run_gpt_prompt_chat_poignancy(persona, persona.scratch.act_description)[
-            0
-        ]
+    # Default importance - the model will assess actual importance
+    # through the unified response's thoughts field
+    return 5
 
 
 def perceive(persona, maze):
@@ -142,7 +143,6 @@ def perceive(persona, maze):
             keywords.update([sub, obj])
 
             # NOTE: Embedding generation has been removed.
-            # SubconsciousRetriever (Sonnet-powered) handles semantic retrieval instead.
             # We still extract a description key for node identification.
             desc_embedding_in = desc
             if "(" in desc:

@@ -160,12 +160,6 @@ def demo(request, sim_code, step, play_speed="2"):
     return render(request, template, context)
 
 
-def UIST_Demo(request):
-    return demo(
-        request, "March20_the_ville_n25_UIST_RUN-step-1-141", 2160, play_speed="3"
-    )
-
-
 def home(request):
     f_curr_sim_code = "temp_storage/curr_sim_code.json"
     f_curr_step = "temp_storage/curr_step.json"

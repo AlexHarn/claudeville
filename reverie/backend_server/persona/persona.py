@@ -1,26 +1,26 @@
 """
-Original Author: Joon Sung Park (joonspk@stanford.edu)
-Heavily modified for Claudeville (Claude CLI port)
+Persona class for Claudeville simulation.
 
-File: persona.py
-Description: Defines the Persona class that powers the agents in Reverie.
+This module defines the Persona class that powers the AI agents in the simulation.
+Each persona has memory structures (spatial, associative, scratch) and uses a
+unified prompting system for decision-making.
 
-Note (May 1, 2023) -- this is effectively GenerativeAgent class. Persona was
-the term we used internally back in 2022, taking from our Social Simulacra
-paper.
+Claudeville uses one LLM call per step via UnifiedPersonaClient, replacing the
+original multi-step cognitive chain.
 """
 
-from persona.cognitive_modules.converse import open_convo_session
-from persona.cognitive_modules.execute import execute
+import datetime
+import random
+
+from path_finder import PathFinder
+from utils import collision_block_id
+
+import cli_interface as cli
 from persona.cognitive_modules.perceive import perceive
-from persona.cognitive_modules.plan import plan
-from persona.cognitive_modules.reflect import reflect
-from persona.cognitive_modules.retrieve import retrieve
 from persona.memory_structures.associative_memory import AssociativeMemory
 from persona.memory_structures.scratch import Scratch
 from persona.memory_structures.spatial_memory import MemoryTree
-from persona.persona_session import PersonaSession
-from persona.subconscious_retriever import SubconsciousRetriever
+from persona.prompt_template.claude_structure import StepResponse, UnifiedPersonaClient
 
 
 class Persona:
@@ -43,11 +43,12 @@ class Persona:
         scratch_saved = f"{folder_mem_saved}/bootstrap_memory/scratch.json"
         self.scratch = Scratch(scratch_saved)
 
-        # NEW: Claudeville session management
-        self.session = PersonaSession(self)
-        self.subconscious = SubconsciousRetriever(self)
-        # Wire them together
-        self.session.subconscious = self.subconscious
+        # Claudeville: Unified persona client (one LLM call per step)
+        self.unified_client = UnifiedPersonaClient(self)
+
+        # Track nearby activity we've already evaluated (to avoid redundant LLM calls)
+        # Format: set of (persona_name, activity_description) tuples
+        self._acknowledged_nearby = set()
 
     def save(self, save_folder):
         """
@@ -78,10 +79,6 @@ class Persona:
         f_scratch = f"{save_folder}/scratch.json"
         self.scratch.save(f_scratch)
 
-        # NEW: Save Claudeville session state
-        if hasattr(self, "session"):
-            self.session._save_session_state()
-
     def perceive(self, maze):
         """
         This function takes the current maze, and returns events that are
@@ -110,103 +107,22 @@ class Persona:
         """
         return perceive(self, maze)
 
-    def retrieve(self, perceived):
-        """
-        This function takes the events that are perceived by the persona as input
-        and returns a set of related events and thoughts that the persona would
-        need to consider as context when planning.
-
-        INPUT:
-          perceive: a list of <ConceptNode> that are perceived and new.
-        OUTPUT:
-          retrieved: dictionary of dictionary. The first layer specifies an event,
-                     while the latter layer specifies the "curr_event", "events",
-                     and "thoughts" that are relevant.
-        """
-        return retrieve(self, perceived)
-
-    def plan(self, maze, personas, new_day, retrieved):
-        """
-        Main cognitive function of the chain. It takes the retrieved memory and
-        perception, as well as the maze and the first day state to conduct both
-        the long term and short term planning for the persona.
-
-        INPUT:
-          maze: Current <Maze> instance of the world.
-          personas: A dictionary that contains all persona names as keys, and the
-                    Persona instance as values.
-          new_day: This can take one of the three values.
-            1) <Boolean> False -- It is not a "new day" cycle (if it is, we would
-               need to call the long term planning sequence for the persona).
-            2) <String> "First day" -- It is literally the start of a simulation,
-               so not only is it a new day, but also it is the first day.
-            2) <String> "New day" -- It is a new day.
-          retrieved: dictionary of dictionary. The first layer specifies an event,
-                     while the latter layer specifies the "curr_event", "events",
-                     and "thoughts" that are relevant.
-        OUTPUT
-          The target action address of the persona (persona.scratch.act_address).
-        """
-        return plan(self, maze, personas, new_day, retrieved)
-
-    def execute(self, maze, personas, plan):
-        """
-        This function takes the agent's current plan and outputs a concrete
-        execution (what object to use, and what tile to travel to).
-
-        INPUT:
-          maze: Current <Maze> instance of the world.
-          personas: A dictionary that contains all persona names as keys, and the
-                    Persona instance as values.
-          plan: The target action address of the persona
-                (persona.scratch.act_address).
-        OUTPUT:
-          execution: A triple set that contains the following components:
-            <next_tile> is a x,y coordinate. e.g., (58, 9)
-            <pronunciatio> is an emoji.
-            <description> is a string description of the movement. e.g.,
-            writing her next novel (editing her novel)
-            @ double studio:double studio:common room:sofa
-        """
-        return execute(self, maze, personas, plan)
-
-    def reflect(self):
-        """
-        Reviews the persona's memory and create new thoughts based on it.
-
-        INPUT:
-          None
-        OUTPUT:
-          None
-        """
-        reflect(self)
-
     def move(self, maze, personas, curr_tile, curr_time):
         """
-        This is the main cognitive function where our main sequence is called.
+        Main cognitive function - decide what to do this simulation step.
 
-        INPUT:
-          maze: The Maze class of the current world.
-          personas: A dictionary that contains all persona names as keys, and the
-                    Persona instance as values.
-          curr_tile: A tuple that designates the persona's current tile location
-                     in (row, col) form. e.g., (58, 39)
-          curr_time: datetime instance that indicates the game's current time.
-        OUTPUT:
-          execution: A triple set that contains the following components:
-            <next_tile> is a x,y coordinate. e.g., (58, 9)
-            <pronunciatio> is an emoji.
-            <description> is a string description of the movement. e.g.,
-            writing her next novel (editing her novel)
-            @ double studio:double studio:common room:sofa
+        Uses UnifiedPersonaClient.step() for a single LLM call per step.
+        Includes skip logic to avoid unnecessary LLM calls when:
+        - Sleeping with no interruptions
+        - Walking to destination with no nearby personas
+        - Continuing current action with no new perceptions
+
+        Returns:
+            tuple: (next_tile, emoji, description)
         """
-        # Updating persona's scratch memory with <curr_tile>.
         self.scratch.curr_tile = curr_tile
 
-        # We figure out whether the persona started a new day, and if it is a new
-        # day, whether it is the very first day of the simulation. This is
-        # important because we set up the persona's long term plan at the start of
-        # a new day.
+        # Check for new day
         new_day = False
         if not self.scratch.curr_time:
             new_day = "First day"
@@ -216,19 +132,569 @@ class Persona:
             new_day = "New day"
         self.scratch.curr_time = curr_time
 
-        # Main cognitive sequence begins here.
-        perceived = self.perceive(maze)
-        retrieved = self.retrieve(perceived)
-        plan = self.plan(maze, personas, new_day, retrieved)
-        self.reflect()
+        # Perceive environment (always needed for spatial memory updates)
+        perceived_nodes = self.perceive(maze)
+        perceptions = self._build_perception_strings(maze, perceived_nodes)
+        nearby_personas = self._get_nearby_personas(maze, personas)
 
-        # <execution> is a triple set that contains the following components:
-        # <next_tile> is a x,y coordinate. e.g., (58, 9)
-        # <pronunciatio> is an emoji. e.g., "\ud83d\udca4"
-        # <description> is a string description of the movement. e.g.,
-        #   writing her next novel (editing her novel)
-        #   @ double studio:double studio:common room:sofa
-        return self.execute(maze, personas, plan)
+        # =====================================================================
+        # SKIP LOGIC - Avoid unnecessary LLM calls
+        # =====================================================================
+        skip_result = self._should_skip_llm_call(
+            new_day, perceptions, nearby_personas, maze, personas
+        )
+        if skip_result:
+            return skip_result
 
-    def open_convo_session(self, convo_mode):
-        open_convo_session(self, convo_mode)
+        # =====================================================================
+        # LLM DECISION - Need to make a new decision
+        # =====================================================================
+        (
+            accessible_locations,
+            valid_sectors,
+            valid_arenas,
+            valid_objects,
+        ) = self._build_accessible_locations(maze)
+
+        if new_day:
+            self._handle_new_day(new_day)
+
+        step_response = self.unified_client.step(
+            perceptions=perceptions,
+            nearby_personas=nearby_personas,
+            accessible_locations=accessible_locations,
+            valid_sectors=valid_sectors,
+            valid_arenas=valid_arenas,
+            valid_objects=valid_objects,
+            conversation_context=None,
+        )
+
+        # Update acknowledged nearby after LLM call
+        self._acknowledged_nearby = set(nearby_personas)
+
+        return self._process_step_response(step_response, maze, personas)
+
+    async def move_async(self, maze, personas, curr_tile, curr_time):
+        """
+        Async version of move() for parallel execution.
+
+        Same logic as move() but uses async LLM calls.
+        """
+        self.scratch.curr_tile = curr_tile
+
+        # Check for new day
+        new_day = False
+        if not self.scratch.curr_time:
+            new_day = "First day"
+        elif self.scratch.curr_time.strftime("%A %B %d") != curr_time.strftime(
+            "%A %B %d"
+        ):
+            new_day = "New day"
+        self.scratch.curr_time = curr_time
+
+        # Perceive environment (always needed for spatial memory updates)
+        perceived_nodes = self.perceive(maze)
+        perceptions = self._build_perception_strings(maze, perceived_nodes)
+        nearby_personas = self._get_nearby_personas(maze, personas)
+
+        # =====================================================================
+        # SKIP LOGIC - Avoid unnecessary LLM calls
+        # =====================================================================
+        skip_result = self._should_skip_llm_call(
+            new_day, perceptions, nearby_personas, maze, personas
+        )
+        if skip_result:
+            return skip_result
+
+        # =====================================================================
+        # LLM DECISION - Need to make a new decision
+        # =====================================================================
+        (
+            accessible_locations,
+            valid_sectors,
+            valid_arenas,
+            valid_objects,
+        ) = self._build_accessible_locations(maze)
+
+        if new_day:
+            await self._handle_new_day_async(new_day)
+
+        step_response = await self.unified_client.step_async(
+            perceptions=perceptions,
+            nearby_personas=nearby_personas,
+            accessible_locations=accessible_locations,
+            valid_sectors=valid_sectors,
+            valid_arenas=valid_arenas,
+            valid_objects=valid_objects,
+            conversation_context=None,
+        )
+
+        # Update acknowledged nearby after LLM call
+        self._acknowledged_nearby = set(nearby_personas)
+
+        return self._process_step_response(step_response, maze, personas)
+
+    # =========================================================================
+    # SKIP LOGIC
+    # =========================================================================
+
+    def _should_skip_llm_call(
+        self, new_day, perceptions, nearby_personas, maze, personas
+    ):
+        """
+        Determine if we can skip the LLM call this step.
+
+        Priority order:
+        1. New day always needs planning
+        2. If walking, continue walking (unless persona nearby)
+        3. If action still in progress, continue it (unless persona nearby)
+        4. Nearby personas interrupt to allow social interaction
+        5. Otherwise, need new decision
+
+        Returns:
+            tuple or None: If skipping, return (next_tile, emoji, description).
+                          If not skipping, return None.
+        """
+        # Never skip on new day - need fresh planning
+        if new_day:
+            return None
+
+        # Get current action info
+        curr_action = self.scratch.act_description or ""
+        curr_emoji = self.scratch.act_pronunciatio or "💭"
+        curr_address = self.scratch.act_address or ""
+
+        # === WALKING ===
+        # If we have a planned path, continue walking (even if personas nearby -
+        # we'll interact when we arrive)
+        if self.scratch.act_path_set and self.scratch.planned_path:
+            next_tile = self.scratch.planned_path[0]
+            self.scratch.planned_path = self.scratch.planned_path[1:]
+            return (next_tile, curr_emoji, f"{curr_action} @ {curr_address}")
+
+        # === ACTION IN PROGRESS (including sleep) ===
+        # If current action duration hasn't elapsed, continue it
+        # Only interrupt for NEW nearby activity (not already acknowledged)
+        if self._action_still_in_progress():
+            if nearby_personas:
+                # Check if there's any NEW activity we haven't seen yet
+                current_nearby = set(nearby_personas)  # set of (name, activity) tuples
+                new_activity = current_nearby - self._acknowledged_nearby
+
+                if new_activity:
+                    # New activity detected - call LLM to decide response
+                    # (After LLM call, we'll update _acknowledged_nearby)
+                    return None
+                # All nearby activity already acknowledged - continue current action
+            return self._continue_current_action(curr_emoji, curr_action, curr_address)
+
+        # === NEARBY PERSONAS ===
+        # If someone is nearby and we have no current action, consider interaction
+        # (This is now only reached if action is NOT in progress)
+
+        # Need to make a new decision
+        return None
+
+    def _action_still_in_progress(self) -> bool:
+        """Check if current action duration hasn't elapsed."""
+        if not self.scratch.act_start_time or not self.scratch.act_duration:
+            return False
+
+        elapsed = (
+            self.scratch.curr_time - self.scratch.act_start_time
+        ).total_seconds() / 60
+        return elapsed < self.scratch.act_duration
+
+    def _continue_current_action(self, emoji, description, address):
+        """Return execution tuple for continuing current action without LLM call."""
+        # Print skip message for visibility
+        self._print_skip_message(description)
+        return (self.scratch.curr_tile, emoji, f"{description} @ {address}")
+
+    def _print_skip_message(self, description):
+        """Print a dim message indicating we skipped the LLM call."""
+        from persona.prompt_template.claude_structure import DEBUG_VERBOSITY
+
+        if DEBUG_VERBOSITY >= 1:
+            color = self._get_persona_color()
+            time_str = (
+                self.scratch.curr_time.strftime("%H:%M")
+                if self.scratch.curr_time
+                else ""
+            )
+            short_desc = (
+                description[:50] + "..." if len(description) > 50 else description
+            )
+            print(
+                cli.c(f"  ○ {self.name}", color)
+                + cli.c(f" {time_str} ", cli.Colors.DIM)
+                + cli.c(f"(continuing) {short_desc}", cli.Colors.DIM)
+            )
+
+    def _get_persona_color(self) -> str:
+        """Get unique color for this persona."""
+        from persona.prompt_template.claude_structure import get_persona_color
+
+        return get_persona_color(self.name)
+
+    # =========================================================================
+    # PERCEPTION HELPERS
+    # =========================================================================
+
+    def _build_perception_strings(self, maze, perceived_nodes):
+        """
+        Build list of perception strings from perceived ConceptNodes and environment.
+
+        Returns a list of strings describing what the persona perceives.
+        """
+        perceptions = []
+
+        # Add perceptions from ConceptNodes
+        for node in perceived_nodes:
+            if hasattr(node, "description") and node.description:
+                # Skip self-observations
+                if not node.description.startswith(self.name):
+                    perceptions.append(node.description)
+
+        # Add current location context
+        tile_info = maze.access_tile(self.scratch.curr_tile)
+        if tile_info.get("arena"):
+            loc_str = f"You are in {tile_info.get('arena', 'unknown')}"
+            if tile_info.get("sector"):
+                loc_str += f" ({tile_info.get('sector')})"
+            perceptions.append(loc_str)
+
+        return perceptions
+
+    def _get_nearby_personas(self, maze, personas):
+        """
+        Get list of (name, activity) tuples for nearby personas.
+        """
+        nearby = []
+        nearby_tiles = maze.get_nearby_tiles(
+            self.scratch.curr_tile, self.scratch.vision_r
+        )
+
+        for tile in nearby_tiles:
+            tile_details = maze.access_tile(tile)
+            if tile_details.get("events"):
+                for event in tile_details["events"]:
+                    # event is (subject, predicate, object, description)
+                    subject = event[0]
+                    # Check if this is a persona (not an object)
+                    if subject in personas and subject != self.name:
+                        activity = event[3] if len(event) > 3 else "idle"
+                        nearby.append((subject, activity))
+
+        # Remove duplicates
+        return list(set(nearby))
+
+    def _build_accessible_locations(self, maze):
+        """
+        Build the accessible locations structure from spatial memory.
+
+        Returns:
+          accessible_locations: dict of {sector: {arena: [objects]}}
+          valid_sectors: list of valid sector names
+          valid_arenas: dict of {sector: [arena_names]}
+          valid_objects: dict of {sector: {arena: [object_names]}}
+        """
+        accessible_locations = {}
+        valid_sectors = []
+        valid_arenas = {}
+        valid_objects = {}
+
+        # Get current world from tile
+        tile_info = maze.access_tile(self.scratch.curr_tile)
+        curr_world = tile_info.get("world", "")
+
+        if not curr_world or curr_world not in self.s_mem.tree:
+            return accessible_locations, valid_sectors, valid_arenas, valid_objects
+
+        # Build from spatial memory tree
+        for sector, arenas in self.s_mem.tree[curr_world].items():
+            if not sector:
+                continue
+            valid_sectors.append(sector)
+            accessible_locations[sector] = {}
+            valid_arenas[sector] = []
+            valid_objects[sector] = {}
+
+            if isinstance(arenas, dict):
+                for arena, objects in arenas.items():
+                    if not arena:
+                        continue
+                    valid_arenas[sector].append(arena)
+                    obj_list = objects if isinstance(objects, list) else []
+                    accessible_locations[sector][arena] = obj_list
+                    valid_objects[sector][arena] = obj_list
+
+        return accessible_locations, valid_sectors, valid_arenas, valid_objects
+
+    def _handle_new_day(self, new_day):
+        """
+        Handle new day initialization - generate wake up hour and daily schedule.
+
+        Uses LLM to generate personalized schedule based on persona's
+        lifestyle, traits, and current focus.
+        """
+        date_str = self.scratch.curr_time.strftime("%A, %B %d, %Y")
+
+        # Call LLM to generate personalized daily plan
+        day_plan = self.unified_client.plan_day(date_str)
+
+        if day_plan.parse_errors:
+            # Fall back to default schedule if LLM fails
+            self._set_default_schedule()
+        else:
+            # Apply the LLM-generated schedule
+            self.scratch.wake_up_hour = day_plan.wake_up_hour
+            self.scratch.daily_req = day_plan.daily_goals
+
+            # Convert schedule to expected format: [["activity", duration], ...]
+            schedule = [
+                [activity, duration] for activity, duration in day_plan.schedule
+            ]
+            self.scratch.f_daily_schedule = schedule
+            self.scratch.f_daily_schedule_hourly_org = schedule[:]
+
+        # Add plan to memory
+        thought = f"This is {self.scratch.name}'s plan for {date_str}"
+        if self.scratch.daily_req:
+            goals_summary = ", ".join(self.scratch.daily_req[:3])
+            thought += f": {goals_summary}"
+
+        created = self.scratch.curr_time
+        expiration = self.scratch.curr_time + datetime.timedelta(days=30)
+        s, p, o = (
+            self.scratch.name,
+            "plan",
+            self.scratch.curr_time.strftime("%A %B %d"),
+        )
+        keywords = set(["plan", "daily", "schedule"])
+        self.a_mem.add_thought(
+            created, expiration, s, p, o, thought, keywords, 5, thought, None
+        )
+
+    async def _handle_new_day_async(self, new_day):
+        """
+        Async version of _handle_new_day for parallel execution.
+        """
+        date_str = self.scratch.curr_time.strftime("%A, %B %d, %Y")
+
+        # Call LLM to generate personalized daily plan (async)
+        day_plan = await self.unified_client.plan_day_async(date_str)
+
+        if day_plan.parse_errors:
+            self._set_default_schedule()
+        else:
+            self.scratch.wake_up_hour = day_plan.wake_up_hour
+            self.scratch.daily_req = day_plan.daily_goals
+            schedule = [
+                [activity, duration] for activity, duration in day_plan.schedule
+            ]
+            self.scratch.f_daily_schedule = schedule
+            self.scratch.f_daily_schedule_hourly_org = schedule[:]
+
+        # Add plan to memory
+        thought = f"This is {self.scratch.name}'s plan for {date_str}"
+        if self.scratch.daily_req:
+            goals_summary = ", ".join(self.scratch.daily_req[:3])
+            thought += f": {goals_summary}"
+
+        created = self.scratch.curr_time
+        expiration = self.scratch.curr_time + datetime.timedelta(days=30)
+        s, p, o = (
+            self.scratch.name,
+            "plan",
+            self.scratch.curr_time.strftime("%A %B %d"),
+        )
+        keywords = set(["plan", "daily", "schedule"])
+        self.a_mem.add_thought(
+            created, expiration, s, p, o, thought, keywords, 5, thought, None
+        )
+
+    def _set_default_schedule(self):
+        """Set a default schedule when LLM planning fails."""
+        default_schedule = [
+            ["sleeping", 420],  # Until 7am
+            ["waking up and morning routine", 60],
+            ["having breakfast", 30],
+            ["working on daily tasks", 180],
+            ["having lunch", 60],
+            ["afternoon activities", 180],
+            ["relaxing", 120],
+            ["having dinner", 60],
+            ["evening leisure", 120],
+            ["getting ready for bed", 30],
+            ["sleeping", 180],
+        ]
+        self.scratch.f_daily_schedule = default_schedule
+        self.scratch.f_daily_schedule_hourly_org = default_schedule[:]
+        self.scratch.daily_req = []
+
+    def _process_step_response(self, step_response: StepResponse, maze, personas):
+        """
+        Process the StepResponse from unified_client.step() and return execution tuple.
+
+        This handles:
+        - Updating scratch with new action details
+        - Resolving location names to tile coordinates
+        - Storing any thoughts in memory
+        - Returning the execution tuple (next_tile, pronunciatio, description)
+        """
+        # Handle parse errors - fall back to idle if we got nothing useful
+        if not step_response.action:
+            return self._create_idle_execution()
+
+        action = step_response.action
+
+        # Get current world for address construction
+        tile_info = maze.access_tile(self.scratch.curr_tile)
+        curr_world = tile_info.get("world", "")
+
+        # Build the action address (world:sector:arena:object)
+        act_address = (
+            f"{curr_world}:{action.sector}:{action.arena}:{action.game_object}"
+        )
+
+        # Update scratch with the new action
+        self.scratch.add_new_action(
+            action_address=act_address,
+            action_duration=action.duration_minutes,
+            action_description=action.description,
+            action_pronunciatio=action.emoji,
+            action_event=action.event,
+            chatting_with=None,  # TODO: Handle social decisions
+            chat=None,
+            chatting_with_buffer=None,
+            chatting_end_time=None,
+            act_obj_description=None,
+            act_obj_pronunciatio=None,
+            act_obj_event=(None, None, None),
+        )
+
+        # Store any thoughts from the response
+        self._store_thoughts(step_response.thoughts)
+
+        # Resolve location to tile coordinates (adapted from execute.py)
+        next_tile = self._resolve_location_to_tile(act_address, maze, personas)
+
+        # Build description string
+        description = f"{action.description} @ {act_address}"
+
+        return (next_tile, action.emoji, description)
+
+    def _resolve_location_to_tile(self, act_address, maze, personas):
+        """
+        Resolve an action address to tile coordinates.
+
+        Adapted from execute.py logic.
+        """
+        # If path is already set and valid, use the planned path
+        if self.scratch.act_path_set and self.scratch.planned_path:
+            ret = self.scratch.planned_path[0]
+            self.scratch.planned_path = self.scratch.planned_path[1:]
+            return ret
+
+        # Need to find a path to the target location
+        path_finder = PathFinder(maze.collision_maze, collision_block_id)
+
+        # Check for special address types
+        if "<persona>" in act_address:
+            # Moving to interact with another persona
+            target_name = act_address.split("<persona>")[-1].strip()
+            if target_name in personas:
+                target_tile = personas[target_name].scratch.curr_tile
+                path = path_finder.find_path(self.scratch.curr_tile, target_tile)
+                if len(path) > 1:
+                    self.scratch.planned_path = path[1:]
+                    self.scratch.act_path_set = True
+                    return path[1] if len(path) > 1 else path[0]
+            return self.scratch.curr_tile
+
+        if "<waiting>" in act_address:
+            # Waiting in place
+            return self.scratch.curr_tile
+
+        if "<random>" in act_address:
+            # Random location within area
+            clean_address = ":".join(act_address.split(":")[:-1])
+            act_address = clean_address
+
+        # Standard location resolution
+        target_tiles = None
+        if act_address in maze.address_tiles:
+            target_tiles = list(maze.address_tiles[act_address])
+        else:
+            # Try partial address matching (without object)
+            parts = act_address.split(":")
+            for i in range(len(parts), 0, -1):
+                partial = ":".join(parts[:i])
+                if partial in maze.address_tiles:
+                    target_tiles = list(maze.address_tiles[partial])
+                    break
+
+        if not target_tiles:
+            # Fallback: stay in place
+            return self.scratch.curr_tile
+
+        # Sample a few target tiles and pick the closest unoccupied one
+        if len(target_tiles) > 4:
+            target_tiles = random.sample(target_tiles, 4)
+
+        # Avoid tiles occupied by other personas
+        persona_names = set(personas.keys())
+        unoccupied_tiles = []
+        for tile in target_tiles:
+            tile_events = maze.access_tile(tile).get("events", [])
+            occupied = any(event[0] in persona_names for event in tile_events)
+            if not occupied:
+                unoccupied_tiles.append(tile)
+
+        if unoccupied_tiles:
+            target_tiles = unoccupied_tiles
+
+        # Find path to nearest target tile
+        path, closest_tile = path_finder.find_path_to_nearest(
+            self.scratch.curr_tile, target_tiles
+        )
+
+        if path and len(path) > 1:
+            self.scratch.planned_path = path[1:]
+            self.scratch.act_path_set = True
+            return path[1]
+
+        return self.scratch.curr_tile
+
+    def _store_thoughts(self, thoughts):
+        """
+        Store thoughts from StepResponse into associative memory.
+        """
+        for thought in thoughts:
+            if not thought.content:
+                continue
+
+            created = self.scratch.curr_time
+            expiration = self.scratch.curr_time + datetime.timedelta(days=30)
+            s, p, o = self.scratch.name, "thought", thought.content[:50]
+            keywords = set(["thought", "reflection"])
+
+            self.a_mem.add_thought(
+                created,
+                expiration,
+                s,
+                p,
+                o,
+                thought.content,
+                keywords,
+                thought.importance,
+                thought.content,
+                None,
+            )
+
+    def _create_idle_execution(self):
+        """
+        Create a default idle execution when we can't get a proper response.
+        """
+        return (self.scratch.curr_tile, "💭", f"{self.name} is idle")

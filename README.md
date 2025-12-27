@@ -1,6 +1,6 @@
 # Claudeville: Generative Agents with Claude
 
-Fork of Stanford's [Generative Agents](https://github.com/joonspk-research/generative_agents) ported from OpenAI API to Claude CLI for Max subscription users.
+Fork of Stanford's [Generative Agents](https://github.com/joonspk-research/generative_agents) ported from OpenAI API to Claude Code CLI for Max subscription users.
 
 <p align="center" width="100%">
 <img src="cover.png" alt="Smallville" style="width: 80%; min-width: 300px; display: block; margin: auto;">
@@ -8,26 +8,39 @@ Fork of Stanford's [Generative Agents](https://github.com/joonspk-research/gener
 
 ## Current Status
 
-**Minimal viable port.** The simulation runs using Claude CLI instead of OpenAI API.
+**Major architectural refactor complete.** This is no longer a minimal port - it's a fundamentally different approach to running generative agents.
+
+### Key Departures from Original
+
+| Original (Stanford) | Claudeville |
+|---------------------|-------------|
+| OpenAI API calls | Claude Agent SDK with persistent sessions |
+| Multi-step cognitive chain | Single unified LLM call per step |
+| File-based frontend polling | HTTP-based communication |
+| Embedding-based retrieval | Keyword + recency scoring |
+| Stateless API calls | Context window monitoring with compaction |
 
 ### What Works
 
-- Claude CLI integration (GPT API calls replaced with CLI subprocess calls)
-- Basic simulation loop (perceive, plan, act, reflect)
-- Memory storage (events, thoughts, chats in JSON)
-- Keyword-based memory retrieval with recency/importance scoring
-- Frontend visualization (Phaser.js)
+- **Claude Agent SDK Integration**: Persistent connections with ~3x faster subsequent calls (~2.5s vs ~7-10s)
+- **Unified Prompting System**: One LLM call per step returns action, social, and thought decisions
+- **HTTP Backend/Frontend**: Flask server with `/movements`, `/status`, `/save` endpoints
+- **Smart LLM Skip Logic**: Avoids redundant calls when actions are in progress
+- **Parallel Persona Execution**: All personas run concurrently per simulation step
+- **Memory storage**: Events, thoughts, chats in JSON with keyword-based retrieval
 
 ### What Was Removed
 
 - All embedding code (no more `text-embedding-ada-002` or cosine similarity)
 - OpenAI dependency
+- Old prompt template directories (v1, v2, v3_ChatGPT)
+- File-based polling (eliminated ~5000 JSON files per simulation)
+- Multi-step cognitive chain (perceive, plan, execute, reflect as separate LLM calls)
 
 ## Requirements
 
-- **Claude Code CLI** with Max subscription
-- Python 3.9+
-- Conda (recommended)
+- **Claude Max subscription** (for Claude Agent SDK access)
+- Conda
 
 ## Quick Start
 
@@ -40,18 +53,24 @@ cd claudeville
 The script will:
 1. Create conda environment if needed
 2. Start Django frontend on http://localhost:8000
-3. Start the backend simulation server
+3. Start Flask backend on http://localhost:5000
+4. Start the CLI simulation controller
 
-When prompted:
-- Fork simulation: `base_the_ville_isabella_maria_klaus`
-- New simulation name: anything you want
+When prompted, press Enter for defaults or choose:
+- `c` - Continue last simulation
+- `custom` - Specify fork and simulation name
+- Enter - Start new simulation with auto-generated name
 
-Then:
+Then in the CLI:
 ```
-run <step-count>
+run <step-count>   # Run N simulation steps
+status             # Show simulation info
+personas           # Show all personas and their current actions
+save               # Save simulation state
+exit               # Save and quit
 ```
 
-Open http://localhost:8000 in browser to watch.
+Open http://localhost:8000 in browser to watch the simulation animate.
 
 ## Manual Setup
 
@@ -83,17 +102,18 @@ claudeville/
 ├── start.sh                  # One-command startup
 ├── environment.yaml          # Conda environment
 ├── reverie/backend_server/
-│   ├── reverie.py            # Main simulation loop
+│   ├── reverie.py            # Main loop + Flask server
+│   ├── cli_interface.py      # CLI commands
 │   └── persona/
+│       ├── persona.py        # Main persona class
 │       ├── cognitive_modules/
-│       │   ├── perceive.py   # Environment perception
-│       │   ├── retrieve.py   # Memory retrieval
-│       │   ├── plan.py       # Action planning
-│       │   ├── reflect.py    # Self-reflection
-│       │   └── converse.py   # Conversations
+│       │   └── perceive.py   # Environment perception
+│       ├── memory_structures/
+│       │   ├── spatial_memory.py
+│       │   ├── associative_memory.py
+│       │   └── scratch.py
 │       └── prompt_template/
-│           ├── claude_structure.py  # Claude CLI wrapper
-│           └── run_prompt.py        # Prompt execution
+│           └── claude_structure.py  # UnifiedPersonaClient + SDK
 └── environment/frontend_server/
     ├── storage/              # Simulation data
     └── templates/            # Phaser.js game
@@ -101,8 +121,7 @@ claudeville/
 
 ## Known Issues
 
-- Simulation is slow even during sleep cycles
-- Browser refresh may desync frontend/backend
+- Avatar/sprite loading shows same character for all personas (frontend JS bug)
 
 ## Acknowledgements
 

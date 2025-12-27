@@ -14,12 +14,11 @@ import os
 class Scratch:
     def __init__(self, f_saved):
         # PERSONA HYPERPARAMETERS
-        # <vision_r> denotes the number of tiles that the persona can see around
-        # them.
+        # <vision_r> denotes the number of tiles that the persona can see around them.
         self.vision_r = 4
-        # <att_bandwidth> TODO
+        # <att_bandwidth> attention bandwidth for perception filtering
         self.att_bandwidth = 3
-        # <retention> TODO
+        # <retention> memory retention factor for perception
         self.retention = 5
 
         # WORLD INFORMATION
@@ -46,14 +45,6 @@ class Scratch:
         self.living_area = None
 
         # REFLECTION VARIABLES
-        self.concept_forget = 100
-        self.daily_reflection_time = 60 * 3
-        self.daily_reflection_size = 5
-        self.overlap_reflect_th = 2
-        self.kw_strg_event_reflect_th = 4
-        self.kw_strg_thought_reflect_th = 4
-
-        # New reflection variables
         self.recency_w = 1
         self.relevance_w = 1
         self.importance_w = 1
@@ -64,6 +55,9 @@ class Scratch:
         self.thought_count = 5
 
         # PERSONA PLANNING
+        # <wake_up_hour> is the hour (0-23) the persona plans to wake up today.
+        # Set by day planning LLM call, used by skip logic to know when to stop sleeping.
+        self.wake_up_hour = 7  # Default to 7am
         # <daily_req> is a list of various goals the persona is aiming to achieve
         # today.
         # e.g., ['Work on her paintings for her upcoming show',
@@ -185,13 +179,6 @@ class Scratch:
             self.lifestyle = scratch_load["lifestyle"]
             self.living_area = scratch_load["living_area"]
 
-            self.concept_forget = scratch_load["concept_forget"]
-            self.daily_reflection_time = scratch_load["daily_reflection_time"]
-            self.daily_reflection_size = scratch_load["daily_reflection_size"]
-            self.overlap_reflect_th = scratch_load["overlap_reflect_th"]
-            self.kw_strg_event_reflect_th = scratch_load["kw_strg_event_reflect_th"]
-            self.kw_strg_thought_reflect_th = scratch_load["kw_strg_thought_reflect_th"]
-
             self.recency_w = scratch_load["recency_w"]
             self.relevance_w = scratch_load["relevance_w"]
             self.importance_w = scratch_load["importance_w"]
@@ -201,6 +188,7 @@ class Scratch:
             self.importance_ele_n = scratch_load["importance_ele_n"]
             self.thought_count = scratch_load["thought_count"]
 
+            self.wake_up_hour = scratch_load.get("wake_up_hour", 7)
             self.daily_req = scratch_load["daily_req"]
             self.f_daily_schedule = scratch_load["f_daily_schedule"]
             self.f_daily_schedule_hourly_org = scratch_load[
@@ -264,13 +252,6 @@ class Scratch:
         scratch["lifestyle"] = self.lifestyle
         scratch["living_area"] = self.living_area
 
-        scratch["concept_forget"] = self.concept_forget
-        scratch["daily_reflection_time"] = self.daily_reflection_time
-        scratch["daily_reflection_size"] = self.daily_reflection_size
-        scratch["overlap_reflect_th"] = self.overlap_reflect_th
-        scratch["kw_strg_event_reflect_th"] = self.kw_strg_event_reflect_th
-        scratch["kw_strg_thought_reflect_th"] = self.kw_strg_thought_reflect_th
-
         scratch["recency_w"] = self.recency_w
         scratch["relevance_w"] = self.relevance_w
         scratch["importance_w"] = self.importance_w
@@ -280,6 +261,7 @@ class Scratch:
         scratch["importance_ele_n"] = self.importance_ele_n
         scratch["thought_count"] = self.thought_count
 
+        scratch["wake_up_hour"] = self.wake_up_hour
         scratch["daily_req"] = self.daily_req
         scratch["f_daily_schedule"] = self.f_daily_schedule
         scratch["f_daily_schedule_hourly_org"] = self.f_daily_schedule_hourly_org

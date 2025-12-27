@@ -71,7 +71,7 @@ class AssociativeMemory:
         self.kw_strength_event = dict()
         self.kw_strength_thought = dict()
 
-        # NOTE: Embeddings have been removed - SubconsciousRetriever handles semantic retrieval
+        # NOTE: Embeddings have been removed
 
         nodes_load = json.load(open(f_saved + "/nodes.json"))
         for count in range(len(nodes_load.keys())):
@@ -185,7 +185,7 @@ class AssociativeMemory:
         with open(out_json + "/kw_strength.json", "w") as outfile:
             json.dump(r, outfile)
 
-        # NOTE: embeddings.json is no longer saved - SubconsciousRetriever handles semantic retrieval
+        # NOTE: embeddings.json is no longer saved
 
     def add_event(
         self,
@@ -253,7 +253,7 @@ class AssociativeMemory:
                 else:
                     self.kw_strength_event[kw] = 1
 
-        # NOTE: Embedding storage removed - SubconsciousRetriever handles semantic retrieval
+        # NOTE: Embedding storage removed
 
         return node
 
@@ -320,7 +320,7 @@ class AssociativeMemory:
                 else:
                     self.kw_strength_thought[kw] = 1
 
-        # NOTE: Embedding storage removed - SubconsciousRetriever handles semantic retrieval
+        # NOTE: Embedding storage removed
 
         return node
 
@@ -374,7 +374,7 @@ class AssociativeMemory:
                 self.kw_to_chat[kw] = [node]
         self.id_to_node[node_id] = node
 
-        # NOTE: Embedding storage removed - SubconsciousRetriever handles semantic retrieval
+        # NOTE: Embedding storage removed
 
         return node
 
