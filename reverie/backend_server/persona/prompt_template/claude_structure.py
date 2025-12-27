@@ -46,6 +46,10 @@ COMPACTION_TOKEN_LIMIT = int(MAX_CONTEXT_TOKENS * COMPACTION_THRESHOLD)  # 160K 
 # Debug verbosity (0=silent, 1=summary, 2=decisions, 3=full prompts)
 DEBUG_VERBOSITY = 1
 
+# Track last printed action per persona (to avoid duplicate output)
+# Format: {persona_name: action_description}
+_last_printed_action: dict[str, str] = {}
+
 
 # ============================================================================
 # #####################[SECTION 2: DATA STRUCTURES] ##########################
@@ -263,7 +267,8 @@ your decisions. The required format is:
   }},
   "social": {{
     "wants_to_talk": false,
-    "target": null
+    "target": null,
+    "conversation_line": null
   }},
   "thoughts": []
 }}
@@ -271,6 +276,14 @@ your decisions. The required format is:
 
 Required fields: action (with all subfields), social
 Optional fields: thoughts (list of {{"content": "...", "importance": 1-10}}), schedule_update
+
+=== CONVERSATIONS ===
+When interacting with someone nearby:
+- Set wants_to_talk: true
+- Set target: their name
+- Set conversation_line: what you actually SAY to them (dialogue in quotes)
+Example: "conversation_line": "Hey Maria! How's your studying going?"
+The conversation_line is ACTUAL DIALOGUE that will be shown as a speech bubble.
 
 === REALITY RULES ===
 1. PHYSICAL: You can only interact with objects at your current location. To use something elsewhere, travel there first.
@@ -939,9 +952,20 @@ Write this as your internal thoughts, not a list."""
         return get_persona_color(self.persona_name)
 
     def _print_step_result(self, result: StepResponse):
-        """Print step result using CLI colors."""
+        """Print step result using CLI colors. Only prints if action changed."""
         if DEBUG_VERBOSITY < 1:
             return
+
+        # Check if action is the same as last printed
+        current_action = result.action.description if result.action else "(no action)"
+        last_action = _last_printed_action.get(self.persona_name)
+
+        if current_action == last_action:
+            # Action unchanged - don't print (skip logic will handle continuing output)
+            return
+
+        # Update last printed action
+        _last_printed_action[self.persona_name] = current_action
 
         tokens = _persona_usage.get(self.persona_name, {}).get("context_tokens", 0)
         color = self._get_persona_color()

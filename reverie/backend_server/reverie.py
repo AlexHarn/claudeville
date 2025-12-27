@@ -535,7 +535,10 @@ class ReverieServer:
         OUTPUT
           None
         """
-        for _ in range(num_steps):
+        for i in range(num_steps):
+            # Print step header
+            cli.print_step_start(self.step, self.curr_time)
+
             # Build environment data from current backend state
             environment = {}
             for persona_name in self.personas:

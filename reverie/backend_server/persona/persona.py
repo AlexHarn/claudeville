@@ -312,10 +312,15 @@ class Persona:
         return (self.scratch.curr_tile, emoji, f"{description} @ {address}")
 
     def _print_skip_message(self, description):
-        """Print a dim message indicating we skipped the LLM call."""
+        """Print a dim message indicating we skipped the LLM call.
+
+        NOTE: Only prints at verbosity level 2+ to reduce noise.
+        New actions are always printed at level 1+.
+        """
         from persona.prompt_template.claude_structure import DEBUG_VERBOSITY
 
-        if DEBUG_VERBOSITY >= 1:
+        # Only print continuing messages at verbosity level 2+
+        if DEBUG_VERBOSITY >= 2:
             color = self._get_persona_color()
             time_str = (
                 self.scratch.curr_time.strftime("%H:%M")
@@ -539,6 +544,7 @@ class Persona:
 
         This handles:
         - Updating scratch with new action details
+        - Processing social decisions (conversations)
         - Resolving location names to tile coordinates
         - Storing any thoughts in memory
         - Returning the execution tuple (next_tile, pronunciatio, description)
@@ -548,6 +554,7 @@ class Persona:
             return self._create_idle_execution()
 
         action = step_response.action
+        social = step_response.social
 
         # Get current world for address construction
         tile_info = maze.access_tile(self.scratch.curr_tile)
@@ -558,6 +565,45 @@ class Persona:
             f"{curr_world}:{action.sector}:{action.arena}:{action.game_object}"
         )
 
+        # Process social decisions - build chat data if conversation is happening
+        chatting_with = None
+        chat = None
+        chatting_with_buffer = None
+        chatting_end_time = None
+
+        if social.wants_to_talk and social.target and social.conversation_line:
+            # Starting or continuing a conversation
+            chatting_with = social.target
+
+            # Build chat list - either append to existing or start new
+            if self.scratch.chat:
+                chat = self.scratch.chat.copy()
+            else:
+                chat = []
+
+            # Add our line to the conversation
+            chat.append([self.name, social.conversation_line])
+
+            # Set chatting buffer (for vision tracking)
+            chatting_with_buffer = {social.target: self.scratch.vision_r}
+
+            # Set conversation end time based on action duration
+            chatting_end_time = self.scratch.curr_time + datetime.timedelta(
+                minutes=action.duration_minutes
+            )
+
+            # Print conversation to CLI
+            cli.print_conversation_line(self.name, social.conversation_line)
+
+        elif social.conversation_line and not social.wants_to_talk:
+            # Just saying something (no formal conversation)
+            if self.scratch.chat:
+                chat = self.scratch.chat.copy()
+            else:
+                chat = []
+            chat.append([self.name, social.conversation_line])
+            cli.print_conversation_line(self.name, social.conversation_line)
+
         # Update scratch with the new action
         self.scratch.add_new_action(
             action_address=act_address,
@@ -565,10 +611,10 @@ class Persona:
             action_description=action.description,
             action_pronunciatio=action.emoji,
             action_event=action.event,
-            chatting_with=None,  # TODO: Handle social decisions
-            chat=None,
-            chatting_with_buffer=None,
-            chatting_end_time=None,
+            chatting_with=chatting_with,
+            chat=chat,
+            chatting_with_buffer=chatting_with_buffer,
+            chatting_end_time=chatting_end_time,
             act_obj_description=None,
             act_obj_pronunciatio=None,
             act_obj_event=(None, None, None),
