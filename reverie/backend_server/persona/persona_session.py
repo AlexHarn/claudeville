@@ -12,13 +12,13 @@ more authentic agent behavior with true continuity of experience.
 Author: Claudeville Project
 """
 
-import subprocess
 import json
-import uuid
 import math
 import os
+import subprocess
+import uuid
 from datetime import datetime
-from typing import Optional, Dict, List, Any, Set
+from typing import Any, Optional
 
 
 class PersonaSession:
@@ -67,8 +67,8 @@ class PersonaSession:
         self.token_usage = 0
         self.message_count = 0
         self.subconscious = None  # Set by persona after initialization
-        self.recent_interactions: Set[str] = set()  # Persons seen this session
-        self.visited_locations: Set[str] = set()  # Locations visited this session
+        self.recent_interactions: set[str] = set()  # Persons seen this session
+        self.visited_locations: set[str] = set()  # Locations visited this session
 
     def _get_storage_base_path(self) -> Optional[str]:
         """
@@ -82,7 +82,7 @@ class PersonaSession:
         """
         # Try to get the persona's folder_mem path if available
         # The persona is initialized with folder_mem_saved which contains the path
-        if hasattr(self.persona, 'a_mem') and hasattr(self.persona.a_mem, 'embeddings'):
+        if hasattr(self.persona, "a_mem") and hasattr(self.persona.a_mem, "embeddings"):
             # We can try to infer from the associative memory path
             # but that's stored internally. Let's check if scratch has storage info
             pass
@@ -95,9 +95,7 @@ class PersonaSession:
         current_dir = os.path.dirname(os.path.abspath(__file__))
         # Navigate up to reverie/backend_server, then to environment/frontend_server/storage
         base_path = os.path.join(
-            current_dir,
-            '..', '..', '..',
-            'environment', 'frontend_server', 'storage'
+            current_dir, "..", "..", "..", "environment", "frontend_server", "storage"
         )
         base_path = os.path.normpath(base_path)
 
@@ -105,9 +103,11 @@ class PersonaSession:
             return None
 
         # Look for the persona in any simulation folder
-        persona_name = self.persona.name if hasattr(self.persona, 'name') else None
+        persona_name = self.persona.name if hasattr(self.persona, "name") else None
         if not persona_name:
-            persona_name = self.persona.scratch.name if hasattr(self.persona, 'scratch') else None
+            persona_name = (
+                self.persona.scratch.name if hasattr(self.persona, "scratch") else None
+            )
 
         if not persona_name:
             return None
@@ -116,7 +116,7 @@ class PersonaSession:
         for sim_folder in os.listdir(base_path):
             sim_path = os.path.join(base_path, sim_folder)
             if os.path.isdir(sim_path):
-                personas_path = os.path.join(sim_path, 'personas', persona_name)
+                personas_path = os.path.join(sim_path, "personas", persona_name)
                 if os.path.exists(personas_path):
                     return personas_path
 
@@ -140,7 +140,7 @@ class PersonaSession:
         """
         storage_path = self._get_storage_base_path()
         if storage_path:
-            return os.path.join(storage_path, 'session_state.json')
+            return os.path.join(storage_path, "session_state.json")
         return None
 
     def _load_or_create_session_id(self) -> str:
@@ -157,16 +157,18 @@ class PersonaSession:
         state_path = self._get_session_state_path()
         if state_path and os.path.exists(state_path):
             try:
-                with open(state_path, 'r') as f:
+                with open(state_path, "r") as f:
                     state = json.load(f)
-                    existing_id = state.get('session_id')
+                    existing_id = state.get("session_id")
                     if existing_id:
                         # Load other state
-                        self.token_usage = state.get('estimated_tokens', 0)
-                        self.recent_interactions = set(state.get('recent_interactions', []))
-                        self.visited_locations = set(state.get('visited_locations', []))
+                        self.token_usage = state.get("estimated_tokens", 0)
+                        self.recent_interactions = set(
+                            state.get("recent_interactions", [])
+                        )
+                        self.visited_locations = set(state.get("visited_locations", []))
                         return existing_id
-            except (json.JSONDecodeError, IOError):
+            except (OSError, json.JSONDecodeError):
                 pass
 
         # No valid existing session, create new one
@@ -187,7 +189,7 @@ class PersonaSession:
         scratch = self.persona.scratch
 
         # Get the identity stable set (ISS) which contains core persona info
-        iss = scratch.get_str_iss() if hasattr(scratch, 'get_str_iss') else ""
+        iss = scratch.get_str_iss() if hasattr(scratch, "get_str_iss") else ""
 
         # Format current time safely
         curr_time_str = "unknown"
@@ -201,9 +203,9 @@ class PersonaSession:
 You exist in a simulated town called Smallville. You have your own
 thoughts, memories, and agency. Respond naturally as yourself.
 
-Current situation: {scratch.act_description or 'idle'}
+Current situation: {scratch.act_description or "idle"}
 Current time: {curr_time_str}
-Current location: {scratch.act_address or 'unknown'}
+Current location: {scratch.act_address or "unknown"}
 
 Important: You maintain genuine continuity of experience. Your memories,
 thoughts, and feelings persist across interactions. Act authentically
@@ -232,7 +234,7 @@ as yourself, not as a simulation of yourself.
 
         # Get schedule info
         schedule_str = self._format_schedule(
-            scratch.f_daily_schedule if hasattr(scratch, 'f_daily_schedule') else None
+            scratch.f_daily_schedule if hasattr(scratch, "f_daily_schedule") else None
         )
 
         # Format current time safely
@@ -251,8 +253,8 @@ as yourself, not as a simulation of yourself.
 {schedule_str}
 
 === CURRENT STATE ===
-Location: {scratch.act_address or 'unknown'}
-Currently: {scratch.act_description or 'idle'}
+Location: {scratch.act_address or "unknown"}
+Currently: {scratch.act_description or "idle"}
 Time: {curr_time_str}
 
 You are continuing your day. Acknowledge this context internally and continue naturally.
@@ -292,10 +294,7 @@ You are continuing your day. Acknowledge this context internally and continue na
 
         try:
             result = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                timeout=self.CLI_TIMEOUT
+                cmd, capture_output=True, text=True, timeout=self.CLI_TIMEOUT
             )
 
             if result.returncode != 0:
@@ -325,7 +324,9 @@ You are continuing your day. Acknowledge this context internally and continue na
         except Exception as e:
             return f"Error in persona session: {str(e)}"
 
-    def prompt_with_memory(self, situation_prompt: str, situation_context: Dict[str, Any]) -> str:
+    def prompt_with_memory(
+        self, situation_prompt: str, situation_context: dict[str, Any]
+    ) -> str:
         """
         Main entry point for prompting - handles memory retrieval automatically.
 
@@ -346,8 +347,10 @@ You are continuing your day. Acknowledge this context internally and continue na
         memory_package = ""
         if self.subconscious:
             try:
-                memory_package = self.subconscious.evaluate_and_retrieve(situation_context)
-            except Exception as e:
+                memory_package = self.subconscious.evaluate_and_retrieve(
+                    situation_context
+                )
+            except Exception:
                 # Log but don't fail if memory retrieval has issues
                 memory_package = ""
 
@@ -363,7 +366,7 @@ You are continuing your day. Acknowledge this context internally and continue na
         # Step 3: Send to persona session
         return self.prompt(full_prompt)
 
-    def _update_token_usage(self, response_json: Dict[str, Any]) -> None:
+    def _update_token_usage(self, response_json: dict[str, Any]) -> None:
         """
         Track token usage from CLI response.
 
@@ -376,9 +379,9 @@ You are continuing your day. Acknowledge this context internally and continue na
         usage = response_json.get("usage", {})
         # Sum all input token types
         self.token_usage = (
-            usage.get("cache_read_input_tokens", 0) +
-            usage.get("cache_creation_input_tokens", 0) +
-            usage.get("input_tokens", 0)
+            usage.get("cache_read_input_tokens", 0)
+            + usage.get("cache_creation_input_tokens", 0)
+            + usage.get("input_tokens", 0)
         )
 
     def _should_compact(self) -> bool:
@@ -401,8 +404,14 @@ You are continuing your day. Acknowledge this context internally and continue na
         # Check if persona is in low cognitive load state
         act_desc = self.persona.scratch.act_description or ""
         low_load_indicators = [
-            "sleep", "idle", "walking", "commuting",
-            "resting", "watching", "waiting", "relaxing"
+            "sleep",
+            "idle",
+            "walking",
+            "commuting",
+            "resting",
+            "watching",
+            "waiting",
+            "relaxing",
         ]
 
         if any(indicator in act_desc.lower() for indicator in low_load_indicators):
@@ -440,7 +449,6 @@ Format this as a natural internal monologue, not a structured list.
         self._save_compaction_summary(summary)
 
         # Step 2: Create fresh session with new ID
-        old_session_id = self.session_id
         self.session_id = str(uuid.uuid4())
         self.is_new_session = True
         self.token_usage = 0
@@ -472,7 +480,8 @@ Format this as a natural internal monologue, not a structured list.
         # Get schedule info
         schedule_str = self._format_schedule(
             self.persona.scratch.f_daily_schedule
-            if hasattr(self.persona.scratch, 'f_daily_schedule') else None
+            if hasattr(self.persona.scratch, "f_daily_schedule")
+            else None
         )
 
         context = f"""
@@ -499,7 +508,7 @@ Continue naturally as yourself.
         # This will trigger the priming flow since is_new_session is True
         self.prompt(context)
 
-    def _get_recent_important_nodes(self, limit: int = 20) -> List[Any]:
+    def _get_recent_important_nodes(self, limit: int = 20) -> list[Any]:
         """
         Get nodes for session priming, sorted by recency * importance.
 
@@ -512,13 +521,13 @@ Continue naturally as yourself.
         Returns:
             List of ConceptNode objects, sorted by combined score.
         """
-        if not hasattr(self.persona, 'a_mem'):
+        if not hasattr(self.persona, "a_mem"):
             return []
 
         nodes = []
-        if hasattr(self.persona.a_mem, 'seq_event'):
+        if hasattr(self.persona.a_mem, "seq_event"):
             nodes.extend(self.persona.a_mem.seq_event)
-        if hasattr(self.persona.a_mem, 'seq_thought'):
+        if hasattr(self.persona.a_mem, "seq_thought"):
             nodes.extend(self.persona.a_mem.seq_thought)
 
         # Score by recency and importance (poignancy)
@@ -528,13 +537,13 @@ Continue naturally as yourself.
         if not curr_time:
             # If no current time, just return by poignancy
             return sorted(
-                [n for n in nodes if hasattr(n, 'poignancy')],
+                [n for n in nodes if hasattr(n, "poignancy")],
                 key=lambda n: n.poignancy,
-                reverse=True
+                reverse=True,
             )[:limit]
 
         for node in nodes:
-            if hasattr(node, 'created') and hasattr(node, 'poignancy'):
+            if hasattr(node, "created") and hasattr(node, "poignancy"):
                 try:
                     age_hours = (curr_time - node.created).total_seconds() / 3600
                     recency_score = math.exp(-age_hours / 24)  # decay over 24h
@@ -547,7 +556,9 @@ Continue naturally as yourself.
         scored.sort(key=lambda x: x[0], reverse=True)
         return [node for _, node in scored[:limit]]
 
-    def _get_important_nodes(self, min_poignancy: int = 5, limit: int = 20) -> List[Any]:
+    def _get_important_nodes(
+        self, min_poignancy: int = 5, limit: int = 20
+    ) -> list[Any]:
         """
         Get high-importance nodes based on poignancy score.
 
@@ -558,26 +569,32 @@ Continue naturally as yourself.
         Returns:
             List of ConceptNode objects with high poignancy.
         """
-        if not hasattr(self.persona, 'a_mem'):
+        if not hasattr(self.persona, "a_mem"):
             return []
 
         nodes = []
-        if hasattr(self.persona.a_mem, 'seq_event'):
-            nodes.extend([
-                n for n in self.persona.a_mem.seq_event
-                if hasattr(n, 'poignancy') and n.poignancy >= min_poignancy
-            ])
-        if hasattr(self.persona.a_mem, 'seq_thought'):
-            nodes.extend([
-                n for n in self.persona.a_mem.seq_thought
-                if hasattr(n, 'poignancy') and n.poignancy >= min_poignancy
-            ])
+        if hasattr(self.persona.a_mem, "seq_event"):
+            nodes.extend(
+                [
+                    n
+                    for n in self.persona.a_mem.seq_event
+                    if hasattr(n, "poignancy") and n.poignancy >= min_poignancy
+                ]
+            )
+        if hasattr(self.persona.a_mem, "seq_thought"):
+            nodes.extend(
+                [
+                    n
+                    for n in self.persona.a_mem.seq_thought
+                    if hasattr(n, "poignancy") and n.poignancy >= min_poignancy
+                ]
+            )
 
         # Sort by poignancy
         nodes.sort(key=lambda n: n.poignancy, reverse=True)
         return nodes[:limit]
 
-    def _get_recent_chats(self, limit: int = 3) -> List[Any]:
+    def _get_recent_chats(self, limit: int = 3) -> list[Any]:
         """
         Get recent chat nodes with full transcripts.
 
@@ -587,13 +604,13 @@ Continue naturally as yourself.
         Returns:
             List of recent chat ConceptNode objects.
         """
-        if not hasattr(self.persona, 'a_mem'):
+        if not hasattr(self.persona, "a_mem"):
             return []
-        if not hasattr(self.persona.a_mem, 'seq_chat'):
+        if not hasattr(self.persona.a_mem, "seq_chat"):
             return []
         return self.persona.a_mem.seq_chat[-limit:]
 
-    def _format_nodes(self, nodes: List[Any]) -> str:
+    def _format_nodes(self, nodes: list[Any]) -> str:
         """
         Format nodes for prompt injection.
 
@@ -608,17 +625,17 @@ Continue naturally as yourself.
 
         formatted = []
         for node in nodes:
-            desc = getattr(node, 'description', str(node))
-            created = getattr(node, 'created', 'unknown time')
+            desc = getattr(node, "description", str(node))
+            created = getattr(node, "created", "unknown time")
 
             # Format timestamp if it's a datetime
-            if hasattr(created, 'strftime'):
+            if hasattr(created, "strftime"):
                 created = created.strftime("%B %d, %H:%M")
 
             formatted.append(f"- [{created}] {desc}")
         return "\n".join(formatted)
 
-    def _format_chat_transcripts(self, chat_nodes: List[Any]) -> str:
+    def _format_chat_transcripts(self, chat_nodes: list[Any]) -> str:
         """
         Format chat transcripts for memory context.
 
@@ -633,12 +650,12 @@ Continue naturally as yourself.
 
         formatted = []
         for chat in chat_nodes:
-            desc = getattr(chat, 'description', 'conversation')
-            filling = getattr(chat, 'filling', [])
-            created = getattr(chat, 'created', 'unknown time')
+            desc = getattr(chat, "description", "conversation")
+            filling = getattr(chat, "filling", [])
+            created = getattr(chat, "created", "unknown time")
 
             # Format timestamp if it's a datetime
-            if hasattr(created, 'strftime'):
+            if hasattr(created, "strftime"):
                 created = created.strftime("%B %d, %H:%M")
 
             transcript = f"--- {desc} ({created}) ---\n"
@@ -692,19 +709,18 @@ Continue naturally as yourself.
             return
 
         state = self._load_session_state()
-        if 'compaction_summaries' not in state:
-            state['compaction_summaries'] = []
+        if "compaction_summaries" not in state:
+            state["compaction_summaries"] = []
 
-        state['compaction_summaries'].append({
-            'timestamp': datetime.now().isoformat(),
-            'summary': summary
-        })
-        state['last_compaction'] = datetime.now().isoformat()
-        state['compaction_count'] = state.get('compaction_count', 0) + 1
+        state["compaction_summaries"].append(
+            {"timestamp": datetime.now().isoformat(), "summary": summary}
+        )
+        state["last_compaction"] = datetime.now().isoformat()
+        state["compaction_count"] = state.get("compaction_count", 0) + 1
 
         self._save_session_state(state)
 
-    def _load_session_state(self) -> Dict[str, Any]:
+    def _load_session_state(self) -> dict[str, Any]:
         """
         Load session state from file.
 
@@ -714,13 +730,13 @@ Continue naturally as yourself.
         state_path = self._get_session_state_path()
         if state_path and os.path.exists(state_path):
             try:
-                with open(state_path, 'r') as f:
+                with open(state_path, "r") as f:
                     return json.load(f)
-            except (json.JSONDecodeError, IOError):
+            except (OSError, json.JSONDecodeError):
                 return {}
         return {}
 
-    def _save_session_state(self, state: Optional[Dict[str, Any]] = None) -> None:
+    def _save_session_state(self, state: Optional[dict[str, Any]] = None) -> None:
         """
         Save session state to file.
 
@@ -736,19 +752,19 @@ Continue naturally as yourself.
             state = self._load_session_state()
 
         # Update with current session info
-        state['session_id'] = self.session_id
-        state['estimated_tokens'] = self.token_usage
-        state['message_count'] = self.message_count
-        state['recent_interactions'] = list(self.recent_interactions)
-        state['visited_locations'] = list(self.visited_locations)
-        state['last_updated'] = datetime.now().isoformat()
+        state["session_id"] = self.session_id
+        state["estimated_tokens"] = self.token_usage
+        state["message_count"] = self.message_count
+        state["recent_interactions"] = list(self.recent_interactions)
+        state["visited_locations"] = list(self.visited_locations)
+        state["last_updated"] = datetime.now().isoformat()
 
         # Ensure directory exists
         try:
             os.makedirs(os.path.dirname(state_path), exist_ok=True)
-            with open(state_path, 'w') as f:
+            with open(state_path, "w") as f:
                 json.dump(state, f, indent=2)
-        except IOError:
+        except OSError:
             # Fail silently on save errors
             pass
 
@@ -770,7 +786,7 @@ Continue naturally as yourself.
         """
         self.visited_locations.add(location)
 
-    def get_session_info(self) -> Dict[str, Any]:
+    def get_session_info(self) -> dict[str, Any]:
         """
         Get information about the current session state.
 
@@ -778,14 +794,14 @@ Continue naturally as yourself.
             Dictionary containing session information.
         """
         return {
-            'session_id': self.session_id,
-            'is_new_session': self.is_new_session,
-            'token_usage': self.token_usage,
-            'message_count': self.message_count,
-            'compaction_threshold': self.MAX_CONTEXT_TOKENS * self.COMPACTION_THRESHOLD,
-            'usage_percentage': (self.token_usage / self.MAX_CONTEXT_TOKENS) * 100,
-            'recent_interactions': list(self.recent_interactions),
-            'visited_locations': list(self.visited_locations)
+            "session_id": self.session_id,
+            "is_new_session": self.is_new_session,
+            "token_usage": self.token_usage,
+            "message_count": self.message_count,
+            "compaction_threshold": self.MAX_CONTEXT_TOKENS * self.COMPACTION_THRESHOLD,
+            "usage_percentage": (self.token_usage / self.MAX_CONTEXT_TOKENS) * 100,
+            "recent_interactions": list(self.recent_interactions),
+            "visited_locations": list(self.visited_locations),
         }
 
     def reset_session(self) -> None:

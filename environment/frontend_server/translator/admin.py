@@ -1,2 +1,2 @@
-from django.contrib import admin
-from .models import *
+# Django admin configuration
+# No models to register - all data stored in JSON files

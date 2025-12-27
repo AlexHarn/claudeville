@@ -3,6 +3,7 @@ Claudeville Test File
 
 A simple test file for testing the Claude CLI integration.
 """
+
 from persona.prompt_template.claude_structure import Claude_sonnet_request
 
 prompt = """

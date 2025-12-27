@@ -2,14 +2,14 @@
 
 <script type="text/javascript">
 	/*
-	  Main resources: 
+	  Main resources:
 	  https://www.youtube.com/watch?v=cKIG1lKwLeo&t=401s&ab_channel=HongLy
-	  For the ground zero code, see the exported files from here: 
-	  https://codepen.io/mikewesthad/pen/BVeoYP?editors=1111 
+	  For the ground zero code, see the exported files from here:
+	  https://codepen.io/mikewesthad/pen/BVeoYP?editors=1111
 
-	  Also worth taking a look: 
+	  Also worth taking a look:
 	  https://www.youtube.com/watch?v=fdXcD9X4NrQ&ab_channel=MorganPage
-	  and 
+	  and
 	  https://www.youtube.com/watch?v=MR2CvWxOEsw&ab_channel=MattWilber
 	 */
 
@@ -18,14 +18,14 @@
 	// PREAMBLE
 	// ###########################################################################
 
-	// <step> -- one full loop around all three phases determined by <phase> is 
-	// a step. We use this to link the steps in the backend. 
+	// <step> -- one full loop around all three phases determined by <phase> is
+	// a step. We use this to link the steps in the backend.
 	let step = {{step}};
 	let sim_code = "{{sim_code}}";
  	let step_size = {{sec_per_step}} * 1000; // 10 seconds = 10000
 
-	// Phaser 3.0 global settings. 
-	// Configuration meant to be passed to the main Phaser game instance. 
+	// Phaser 3.0 global settings.
+	// Configuration meant to be passed to the main Phaser game instance.
 	const config = {
 	  type: Phaser.AUTO,
 	  width: 1500,
@@ -59,13 +59,13 @@
 	//   scale: {zoom: 1} };
 
 
-	// Creating the game instance and setting up the main Phaser variables that  
-	// will be used in it. 
+	// Creating the game instance and setting up the main Phaser variables that
+	// will be used in it.
 	const game = new Phaser.Game(config);
 	let cursors;
 	let player;
 
-	// Persona related variables. This should have the name of the persona as its 
+	// Persona related variables. This should have the name of the persona as its
 	// keys, and the instances of the Persona class as the values.
 	let persona_names = {{ persona_init_pos|safe }};
 	var spawn_tile_loc = {};
@@ -82,9 +82,9 @@
 
 	// <tile_width> is the width of one individual tile (tiles are square)
 	let tile_width = 32;
-	// Important: tile_width % movement_speed has to be 0. 
-	// <movement_speed> determines how fast we move at each upate cylce. 
-	let movement_speed = {{play_speed}}; 
+	// Important: tile_width % movement_speed has to be 0.
+	// <movement_speed> determines how fast we move at each upate cylce.
+	let movement_speed = {{play_speed}};
 
 	// Variables for storing movements that are sent from the backend server.
 	let execute_count_max = tile_width/movement_speed;
@@ -95,38 +95,38 @@
   let start_datetime =new Date(Date.parse("{{start_datetime}}"));
   var datetime_options = { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' };
  	document.getElementById("game-time-content").innerHTML = start_datetime.toLocaleTimeString("en-US", datetime_options);
- 	
+
 
 	// ###########################################################################
 	// ENGINE
 	// ###########################################################################
 
-	// Joon: Phaser 3.0 is oriented around "scenes" -- recall how Pokemon plays: 
+	// Joon: Phaser 3.0 is oriented around "scenes" -- recall how Pokemon plays:
 	//       there is the outdoor space, and then there is the indoor space; when
 	//       you go inside, you transition to a new "scene" and the outdoor space
-	//       basically disappears. 
+	//       basically disappears.
 	//       A scene in Phaser has four key methods that are called at different
-	//       stages of rendering for different purposes. They are: 
+	//       stages of rendering for different purposes. They are:
 	//       init() -> preload() -> create() -> update()
-	//         init() is called only once at the very beginning. This is the 
-	//           initialization function in case that is needed. 
+	//         init() is called only once at the very beginning. This is the
+	//           initialization function in case that is needed.
 	//         preload() is called once and preloads any of the assets
-	//         create() is also called once after preloading... creates sprites 
+	//         create() is also called once after preloading... creates sprites
 	//           and actually displays stuff
-	//         update() is called on each frame during the game play 
+	//         update() is called on each frame during the game play
 
-	function preload() {  
-		// For managing cross origin errors. We need to set this, change AWS 
-		// CORS settings, and django AWS settings. 
+	function preload() {
+		// For managing cross origin errors. We need to set this, change AWS
+		// CORS settings, and django AWS settings.
 		this.load.crossOrigin = '';
 
-	  // Loading the necessary images (e.g., the background image, character 
-	  // sprites). 
+	  // Loading the necessary images (e.g., the background image, character
+	  // sprites).
 	  // Joon: for load.image, the first parameter is simply the key value that
 	  //       you are passing in. The second parameter should be pointed to the
-	  //       png file that contains the tileset. 
-	  //       Also IMPORTANT: when you create a tileset in Tiled, always be  
-	  //       sure to check the "embedded" option. 
+	  //       png file that contains the tileset.
+	  //       Also IMPORTANT: when you create a tileset in Tiled, always be
+	  //       sure to check the "embedded" option.
 	  this.load.image("blocks_1", "{% static 'assets/the_ville/visuals/map_assets/blocks/blocks_1.png' %}");
 	  this.load.image("walls", "{% static 'assets/the_ville/visuals/map_assets/v1/Room_Builder_32x32.png' %}");
 	  this.load.image("interiors_pt1", "{% static 'assets/the_ville/visuals/map_assets/v1/interiors_pt1.png' %}");
@@ -144,23 +144,23 @@
 	  this.load.image("CuteRPG_Desert_B", "{% static 'assets/the_ville/visuals/map_assets/cute_rpg_word_VXAce/tilesets/CuteRPG_Desert_B.png' %}");
 	  this.load.image("CuteRPG_Forest_C", "{% static 'assets/the_ville/visuals/map_assets/cute_rpg_word_VXAce/tilesets/CuteRPG_Forest_C.png' %}");
 
-	  // Joon: This is the export json file you get from Tiled. 
+	  // Joon: This is the export json file you get from Tiled.
 	  this.load.tilemapTiledJSON("map", "{% static 'assets/the_ville/visuals/the_ville_jan7.json' %}");
 
-	  // An atlas is a way to pack multiple images together into one texture. I'm 
-	  // using it to load all the player animations (walking left, walking right, 
+	  // An atlas is a way to pack multiple images together into one texture. I'm
+	  // using it to load all the player animations (walking left, walking right,
 	  // etc.) in one image. For more info see:
 	  // https://labs.phaser.io/view.html?src=src/animation/texture%20atlas%20animation.js
-	  // If you don't use an atlas, you can do the same thing with a spritesheet, 
+	  // If you don't use an atlas, you can do the same thing with a spritesheet,
 	  // see: https://labs.phaser.io/view.html?src=src/animation/single%20sprite%20sheet.js
-	  // Joon: Technically, I think this guy had the best tutorial for atlas: 
+	  // Joon: Technically, I think this guy had the best tutorial for atlas:
 	  //       https://www.youtube.com/watch?v=fdXcD9X4NrQ&ab_channel=MorganPage
-	  this.load.atlas("atlas", "{% static 'assets/characters/Yuriko_Yamamoto.png' %}", 
+	  this.load.atlas("atlas", "{% static 'assets/characters/Yuriko_Yamamoto.png' %}",
 	  												     "{% static 'assets/characters/atlas.json' %}");
 
 	  {% for p in persona_names %}
 		  {% with 'assets/characters/'|add:p.underscore|add:'.png' as image_static %}
-			  this.load.atlas("{{p.underscore}}", "{% static image_static %}", 
+			  this.load.atlas("{{p.underscore}}", "{% static image_static %}",
 		  										  		     "{% static 'assets/characters/atlas.json' %}");
 			{% endwith %}
 	  {% endfor %}
@@ -168,16 +168,16 @@
 	  this.load.image('speech_bubble', "{% static 'assets/speech_bubble/v3.png' %}");
 	}
 
-	function create() {  
+	function create() {
 	  const map = this.make.tilemap({ key: "map" });
-	  // Joon: Logging map is really helpful for debugging here: 
+	  // Joon: Logging map is really helpful for debugging here:
 	  //       console.log(map);
 
 	  // The first parameter is the name you gave to the tileset in Tiled and then
 	  // the key of the tileset image in Phaser's cache (i.e. the name you used in
 	  // preload)
-	  // Joon: for the first parameter here, really take a look at the 
-	  //       console.log(map) output. You need to make sure that the name 
+	  // Joon: for the first parameter here, really take a look at the
+	  //       console.log(map) output. You need to make sure that the name
 	  //       matches.
 	  const collisions = map.addTilesetImage("blocks", "blocks_1");
 	  const walls = map.addTilesetImage("Room_Builder_32x32", "walls");
@@ -196,14 +196,14 @@
 	  const CuteRPG_Desert_B = map.addTilesetImage("CuteRPG_Desert_B", "CuteRPG_Desert_B");
 	  const CuteRPG_Forest_C = map.addTilesetImage("CuteRPG_Forest_C", "CuteRPG_Forest_C");
 
-	  // The first parameter is the layer name (or index) taken from Tiled, the 
-	  // second parameter is the tileset you set above, and the final two 
-	  // parameters are the x, y coordinate. 
-	  // Joon: The "layer name" that comes as the first parameter value  
+	  // The first parameter is the layer name (or index) taken from Tiled, the
+	  // second parameter is the tileset you set above, and the final two
+	  // parameters are the x, y coordinate.
+	  // Joon: The "layer name" that comes as the first parameter value
 	  //       literally is taken from our Tiled layer name. So to find out what
-	  //       they are; you actually need to open up tiled and see how you 
-	  //       named things there. 
-	  let tileset_group_1 = [CuteRPG_Field_B, CuteRPG_Field_C, CuteRPG_Harbor_C, CuteRPG_Village_B, 
+	  //       they are; you actually need to open up tiled and see how you
+	  //       named things there.
+	  let tileset_group_1 = [CuteRPG_Field_B, CuteRPG_Field_C, CuteRPG_Harbor_C, CuteRPG_Village_B,
 	  											 CuteRPG_Forest_B, CuteRPG_Desert_C, CuteRPG_Mountains_B, CuteRPG_Desert_B, CuteRPG_Forest_C,
 	  											 interiors_pt1, interiors_pt2, interiors_pt3, interiors_pt4, interiors_pt5, walls];
 	  const bottomGroundLayer = map.createLayer("Bottom Ground", tileset_group_1, 0, 0);
@@ -227,44 +227,44 @@
 	  // const foregroundLayer = map.createLayer("Foreground", interiors, 0, 0);
 
 	  // Joon : This is where you want to create a custom field for the tileset
-	  //        in Tiled. Take a look at this guy's tutorial: 
+	  //        in Tiled. Take a look at this guy's tutorial:
 	  //        https://www.youtube.com/watch?v=MR2CvWxOEsw&ab_channel=MattWilber
 	  collisionsLayer.setCollisionByProperty({ collide: true });
-	  // By default, everything gets depth sorted on the screen in the order we 
-	  // created things. Here, we want the "Above Player" layer to sit on top of 
-	  // the player, so we explicitly give it a depth. Higher depths will sit on 
+	  // By default, everything gets depth sorted on the screen in the order we
+	  // created things. Here, we want the "Above Player" layer to sit on top of
+	  // the player, so we explicitly give it a depth. Higher depths will sit on
 	  // top of lower depth objects.
 	  // Collisions layer should get a negative depth since we do not want to see
-	  // it. 
+	  // it.
 	  collisionsLayer.setDepth(-1);
 	  foregroundL1Layer.setDepth(2);
 	  foregroundL2Layer.setDepth(2);
 
-	  // *** SET UP CAMERA *** 
-	  // "player" is to be set as the center of mass for our "camera." We 
-	  // basically create a game character sprite as we would for our personas 
-	  // but we move it to depth -1 and let it pass through the collision map;  
-	  // that is, do not have the following line: 
+	  // *** SET UP CAMERA ***
+	  // "player" is to be set as the center of mass for our "camera." We
+	  // basically create a game character sprite as we would for our personas
+	  // but we move it to depth -1 and let it pass through the collision map;
+	  // that is, do not have the following line:
 	  // this.physics.add.collider(player, collisionsLayer);
-	  // OLD NOTE: Create a sprite with physics enabled via the physics system. 
-	  // The image  used for the sprite has a bit of whitespace, so I'm using 
+	  // OLD NOTE: Create a sprite with physics enabled via the physics system.
+	  // The image  used for the sprite has a bit of whitespace, so I'm using
 	  // setSize & setOffset to control the size of the player's body.
 	  player = this.physics.add.
 	                sprite(2400, 588, "atlas", "down").
 	                setSize(30, 40).
 	                setOffset(0, 0);
 	  player.setDepth(-1);
-	  // Setting up the camera. 
+	  // Setting up the camera.
 	  const camera = this.cameras.main;
 	  camera.startFollow(player);
 	  camera.setBounds(0, 0, map.widthInPixels, map.heightInPixels);
 	  cursors = this.input.keyboard.createCursorKeys();
 
-	  // *** SET UP PERSONAS *** 
-	  // We start by creating the game sprite objects. 
-	  for (let i=0; i<Object.keys(spawn_tile_loc).length; i++) { 
+	  // *** SET UP PERSONAS ***
+	  // We start by creating the game sprite objects.
+	  for (let i=0; i<Object.keys(spawn_tile_loc).length; i++) {
 	    let persona_name = Object.keys(spawn_tile_loc)[i];
-	    let start_pos = [spawn_tile_loc[persona_name][0] * tile_width + tile_width / 2, 
+	    let start_pos = [spawn_tile_loc[persona_name][0] * tile_width + tile_width / 2,
 	                     spawn_tile_loc[persona_name][1] * tile_width + tile_width];
 	    let new_sprite = this.physics.add
 	                         .sprite(start_pos[0], start_pos[1], persona_name, "down")
@@ -276,19 +276,19 @@
 
 	    // Here, we are creating the persona and its pronunciatio sprites.
 	    personas[persona_name] = new_sprite;
-	    speech_bubbles[persona_name] = this.add.image(new_sprite.body.x - 0, 
+	    speech_bubbles[persona_name] = this.add.image(new_sprite.body.x - 0,
 	    																						  new_sprite.body.y - 30,
 	    																						  'speech_bubble').setDepth(3);
       speech_bubbles[persona_name].displayWidth = 130;
       speech_bubbles[persona_name].displayHeight = 58;
 
 	    pronunciatios[persona_name] = this.add.text(
-	                                   new_sprite.body.x - 6, 
-	                                   new_sprite.body.y - 42, 
+	                                   new_sprite.body.x - 6,
+	                                   new_sprite.body.y - 42,
 	                                   "🦁", {
-	                                   font: "24px monospace", 
-	                                   fill: "#000000", 
-	                                   padding: { x: 8, y: 8}, 
+	                                   font: "24px monospace",
+	                                   fill: "#000000",
+	                                   padding: { x: 8, y: 8},
 	                                   border:"solid",
 	                                   borderRadius:"10px"}).setDepth(3);
 	  }
@@ -296,7 +296,7 @@
 	  // Create the player's walking animations from the texture atlas. These are
 	  // stored in the global animation manager so any sprite can access them.
 	  const anims = this.anims;
-		for (let i=0; i<Object.keys(persona_names).length; i++) { 
+		for (let i=0; i<Object.keys(persona_names).length; i++) {
 			let persona_name = Object.keys(persona_names)[i];
 			let left_walk_name = persona_name + "-left-walk";
 			let right_walk_name = persona_name + "-right-walk";
@@ -332,23 +332,23 @@
 
 
 	function update(time, delta) {
-		// *** SETUP PLAY AND PAUSE BUTTON *** 
+		// *** SETUP PLAY AND PAUSE BUTTON ***
 		let play_context = this;
-		function game_resume() {  
+		function game_resume() {
 			play_context.scene.resume();
-		}  
+		}
 		play_button.onclick = function(){
 			game_resume();
 		};
-		function game_pause() {  
+		function game_pause() {
 			play_context.scene.pause();
-		}  
+		}
 		pause_button.onclick = function(){
 			game_pause();
 		};
 
-	  // *** MOVE CAMERA *** 
-	  // This is where we finish up the camera setting we started in the create() 
+	  // *** MOVE CAMERA ***
+	  // This is where we finish up the camera setting we started in the create()
 	  // function. We set the movement speed of the camera and wire up the keys to
 	  // map to the actual movement.
 	  const camera_speed = 400;
@@ -356,18 +356,18 @@
 	  player.body.setVelocity(0);
 	  if (cursors.left.isDown) {
 	    player.body.setVelocityX(-camera_speed);
-	  } 
+	  }
 	  if (cursors.right.isDown) {
 	    player.body.setVelocityX(camera_speed);
-	  } 
+	  }
 	  if (cursors.up.isDown) {
 	    player.body.setVelocityY(-camera_speed);
-	  } 
+	  }
 	  if (cursors.down.isDown) {
 	    player.body.setVelocityY(camera_speed);
 	  }
 
-	  
+
 	  let curr_focused_persona = document.getElementById("temp_focus").textContent;
 	  if (curr_focused_persona != "") {
 	  	player.body.x = personas[curr_focused_persona].body.x;
@@ -385,26 +385,26 @@
     	let curr_speech_bubble = speech_bubbles[Object.keys(personas)[i]];
 
     	if (curr_persona_name.replace("_", " ") in all_movement[step]) {
-    		if (execute_count == execute_count_max) { 
+    		if (execute_count == execute_count_max) {
     			let curr_x = all_movement[step][curr_persona_name.replace("_", " ")]["movement"][0]
 	        let curr_y = all_movement[step][curr_persona_name.replace("_", " ")]["movement"][1]
-    			movement_target[curr_persona_name] = [curr_x * tile_width, 
-	                                              curr_y * tile_width]; 
+    			movement_target[curr_persona_name] = [curr_x * tile_width,
+	                                              curr_y * tile_width];
 	        let pronunciatio_content = all_movement[step][curr_persona_name.replace("_", " ")]["pronunciatio"];
 	        let description_content = all_movement[step][curr_persona_name.replace("_", " ")]["description"];
 	        let chat_content_raw = all_movement[step][curr_persona_name.replace("_", " ")]["chat"];
 
 	        let chat_content = "";
 	        if (chat_content_raw != null ){
-		        for (let j=0; j<chat_content_raw.length; j++) { 
+		        for (let j=0; j<chat_content_raw.length; j++) {
 		        	chat_content += chat_content_raw[j][0] + ": " + chat_content_raw[j][1] + "<br>"
 		        }
 		      } else {
 		      	chat_content = "<em>None at the moment</em>"
 		      }
 
-	       	// This is what gives the pronunciatio balloon the name initials. We 
-	        // use regex to extract the initials of the personas. 
+	       	// This is what gives the pronunciatio balloon the name initials. We
+	        // use regex to extract the initials of the personas.
 	        // E.g., "Dolores Murphy" -> "DM"
 	        let rgx = new RegExp(/(\p{L}{1})\p{L}+/, 'gu');
 	        let initials = [...curr_persona_name.matchAll(rgx)] || [];
@@ -413,7 +413,7 @@
 	        ).toUpperCase();
 	        pronunciatios[curr_persona_name].setText(initials + ": " + pronunciatio_content);
 
-	        // Updating the status of each personas 
+	        // Updating the status of each personas
 	        document.getElementById("quick_emoji-"+curr_persona_name).innerHTML = pronunciatio_content;
 	        document.getElementById("current_action__"+curr_persona_name).innerHTML = description_content.split("@")[0];
 	        document.getElementById("target_address__"+curr_persona_name).innerHTML = description_content.split("@")[1];
@@ -422,12 +422,12 @@
 
     		if (execute_count > 0) {
     			if (curr_persona.body.x < movement_target[curr_persona_name][0]) {
-	          curr_persona.body.x += movement_speed; 
+	          curr_persona.body.x += movement_speed;
 	          anims_direction = "r";
 	          pre_anims_direction = "r"
 	          pre_anims_direction_dict[curr_persona_name] = "r"
 	        } else if (curr_persona.body.x > movement_target[curr_persona_name][0]) {
-	          curr_persona.body.x -= movement_speed; 
+	          curr_persona.body.x -= movement_speed;
 	          anims_direction = "l";
 	          pre_anims_direction = "l"
 	          pre_anims_direction_dict[curr_persona_name] = "l"
@@ -445,9 +445,9 @@
 	        	anims_direction = "";
 	        }
 
-	        curr_pronunciatio.x = curr_persona.body.x + 18; 
-          curr_pronunciatio.y = curr_persona.body.y - 42 - 25; // DEBUG 1 --- I added 32 offset on Dec 29. 
-          curr_speech_bubble.x = curr_persona.body.x + 80; 
+	        curr_pronunciatio.x = curr_persona.body.x + 18;
+          curr_pronunciatio.y = curr_persona.body.y - 42 - 25; // DEBUG 1 --- I added 32 offset on Dec 29.
+          curr_speech_bubble.x = curr_persona.body.x + 80;
           curr_speech_bubble.y = curr_persona.body.y - 39;
 
           let left_walk_name = curr_persona_name + "-left-walk";
@@ -464,7 +464,7 @@
 			      curr_persona.anims.play(down_walk_name, true);
 			    };
     		}
-    	} else { 
+    	} else {
     		curr_persona.anims.stop();
 	      // If we were moving, pick an idle frame to use
 	      if (pre_anims_direction_dict[curr_persona_name] == "l") curr_persona.setTexture(curr_persona_name, "left"); else
@@ -495,40 +495,3 @@
 	var play_button=document.getElementById("play_button");
 	var pause_button=document.getElementById("pause_button");
 </script>
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-

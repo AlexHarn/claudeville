@@ -14,11 +14,9 @@ Architecture:
     - Persona receives natural language memories injected into context
 """
 
-import subprocess
 import json
-from datetime import datetime
-from typing import Optional, Dict, List, Any, Set
-
+import subprocess
+from typing import Any, Optional
 
 # System prompt for the subconscious retriever
 SUBCONSCIOUS_SYSTEM_PROMPT = """You are the SUBCONSCIOUS MEMORY SYSTEM for {persona_name}.
@@ -96,10 +94,10 @@ class SubconsciousRetriever:
                      scratch pad (scratch) with current state
         """
         self.persona = persona
-        self.recent_interactions: Set[str] = set()  # Persons seen this session
-        self.visited_locations: Set[str] = set()  # Locations visited this session
+        self.recent_interactions: set[str] = set()  # Persons seen this session
+        self.visited_locations: set[str] = set()  # Locations visited this session
 
-    def evaluate_and_retrieve(self, current_situation: Dict[str, Any]) -> str:
+    def evaluate_and_retrieve(self, current_situation: dict[str, Any]) -> str:
         """
         Called before each persona prompt. Evaluates if memory retrieval is
         needed and returns a memory package to inject into persona's context.
@@ -158,7 +156,7 @@ class SubconsciousRetriever:
             # If parsing fails, return empty - fail gracefully
             return ""
 
-    def _needs_retrieval(self, situation: Dict[str, Any]) -> bool:
+    def _needs_retrieval(self, situation: dict[str, Any]) -> bool:
         """
         Quick heuristic check before invoking model.
 
@@ -193,7 +191,7 @@ class SubconsciousRetriever:
 
         return False
 
-    def _check_keyword_triggers(self, keywords: List[str]) -> bool:
+    def _check_keyword_triggers(self, keywords: list[str]) -> bool:
         """
         Check if keywords match high-importance memory keywords.
 
@@ -206,14 +204,14 @@ class SubconsciousRetriever:
         Returns:
             bool: True if any keyword matches important memory keywords
         """
-        if not hasattr(self.persona, 'a_mem'):
+        if not hasattr(self.persona, "a_mem"):
             return False
 
         # Get persona's important keywords from memory
-        important_keywords: Set[str] = set()
+        important_keywords: set[str] = set()
 
         # Check kw_to_event for high-frequency keywords (appears in 3+ events)
-        if hasattr(self.persona.a_mem, 'kw_to_event'):
+        if hasattr(self.persona.a_mem, "kw_to_event"):
             try:
                 for kw, events in self.persona.a_mem.kw_to_event.items():
                     if len(events) >= 3:
@@ -222,7 +220,7 @@ class SubconsciousRetriever:
                 pass  # Handle malformed data gracefully
 
         # Check kw_to_thought for high-frequency keywords (appears in 2+ thoughts)
-        if hasattr(self.persona.a_mem, 'kw_to_thought'):
+        if hasattr(self.persona.a_mem, "kw_to_thought"):
             try:
                 for kw, thoughts in self.persona.a_mem.kw_to_thought.items():
                     if len(thoughts) >= 2:
@@ -237,7 +235,7 @@ class SubconsciousRetriever:
 
         return False
 
-    def _build_prompt(self, situation: Dict[str, Any]) -> str:
+    def _build_prompt(self, situation: dict[str, Any]) -> str:
         """
         Build the full prompt for retrieval.
 
@@ -255,7 +253,7 @@ class SubconsciousRetriever:
         memory_context = self._build_memory_context()
 
         # Build situation description
-        situation_parts: List[str] = []
+        situation_parts: list[str] = []
         if situation.get("new_person"):
             situation_parts.append(f"{situation['new_person']} has appeared nearby.")
         if situation.get("new_location"):
@@ -263,20 +261,22 @@ class SubconsciousRetriever:
         if situation.get("time_skip"):
             situation_parts.append("Significant time has passed.")
         if situation.get("conversation_keywords"):
-            keywords_str = ', '.join(situation['conversation_keywords'])
+            keywords_str = ", ".join(situation["conversation_keywords"])
             situation_parts.append(f"The conversation mentions: {keywords_str}")
         if situation.get("current_activity"):
             situation_parts.append(f"Current activity: {situation['current_activity']}")
         if situation.get("nearby_people"):
-            nearby_str = ', '.join(situation['nearby_people'])
+            nearby_str = ", ".join(situation["nearby_people"])
             situation_parts.append(f"Nearby people: {nearby_str}")
 
-        situation_desc = " ".join(situation_parts) if situation_parts else "Normal situation."
+        situation_desc = (
+            " ".join(situation_parts) if situation_parts else "Normal situation."
+        )
 
         # Get current state with safe fallbacks
-        current_activity = self._get_scratch_attr('act_description', 'idle')
-        current_location = self._get_scratch_attr('act_address', 'unknown')
-        current_time = self._get_scratch_attr('curr_time', 'unknown')
+        current_activity = self._get_scratch_attr("act_description", "idle")
+        current_location = self._get_scratch_attr("act_address", "unknown")
+        current_time = self._get_scratch_attr("curr_time", "unknown")
 
         prompt = f"""=== CURRENT SITUATION ===
 {situation_desc}
@@ -305,7 +305,9 @@ Search the memory database and return a memory package if relevant memories exis
             str: The persona's name, or "Unknown" if not available
         """
         try:
-            if hasattr(self.persona, 'scratch') and hasattr(self.persona.scratch, 'name'):
+            if hasattr(self.persona, "scratch") and hasattr(
+                self.persona.scratch, "name"
+            ):
                 return self.persona.scratch.name or "Unknown"
         except AttributeError:
             pass
@@ -323,7 +325,7 @@ Search the memory database and return a memory package if relevant memories exis
             str: The attribute value or default
         """
         try:
-            if hasattr(self.persona, 'scratch'):
+            if hasattr(self.persona, "scratch"):
                 value = getattr(self.persona.scratch, attr, None)
                 if value is not None:
                     return str(value)
@@ -343,13 +345,13 @@ Search the memory database and return a memory package if relevant memories exis
             str: JSON-formatted string of persona's memories, or a message
                  indicating no memories are available
         """
-        memories: List[Dict[str, Any]] = []
+        memories: list[dict[str, Any]] = []
 
-        if not hasattr(self.persona, 'a_mem'):
+        if not hasattr(self.persona, "a_mem"):
             return "No memories available."
 
         # This persona's events only (limit to recent/important)
-        if hasattr(self.persona.a_mem, 'seq_event'):
+        if hasattr(self.persona.a_mem, "seq_event"):
             try:
                 events = self.persona.a_mem.seq_event
                 if events:
@@ -361,7 +363,7 @@ Search the memory database and return a memory package if relevant memories exis
                 pass  # Handle malformed data gracefully
 
         # This persona's thoughts only
-        if hasattr(self.persona.a_mem, 'seq_thought'):
+        if hasattr(self.persona.a_mem, "seq_thought"):
             try:
                 thoughts = self.persona.a_mem.seq_thought
                 if thoughts:
@@ -373,7 +375,7 @@ Search the memory database and return a memory package if relevant memories exis
                 pass  # Handle malformed data gracefully
 
         # This persona's conversations (they participated in)
-        if hasattr(self.persona.a_mem, 'seq_chat'):
+        if hasattr(self.persona.a_mem, "seq_chat"):
             try:
                 chats = self.persona.a_mem.seq_chat
                 if chats:
@@ -389,7 +391,9 @@ Search the memory database and return a memory package if relevant memories exis
 
         return json.dumps(memories, indent=2, default=str)
 
-    def _extract_memory_node(self, node: Any, memory_type: str) -> Optional[Dict[str, Any]]:
+    def _extract_memory_node(
+        self, node: Any, memory_type: str
+    ) -> Optional[dict[str, Any]]:
         """
         Extract a memory node (event or thought) into a dictionary.
 
@@ -403,30 +407,30 @@ Search the memory database and return a memory package if relevant memories exis
         try:
             # Get date with safe fallback
             date_str = "unknown"
-            if hasattr(node, 'created'):
+            if hasattr(node, "created"):
                 try:
                     date_str = node.created.strftime("%Y-%m-%d %H:%M")
                 except (AttributeError, ValueError):
                     date_str = str(node.created)
 
             # Get description
-            description = getattr(node, 'description', None)
+            description = getattr(node, "description", None)
             if description is None:
                 description = str(node)
 
             # Get poignancy (importance score)
-            poignancy = getattr(node, 'poignancy', 1)
+            poignancy = getattr(node, "poignancy", 1)
 
             return {
                 "type": memory_type,
                 "date": date_str,
                 "description": description,
-                "poignancy": poignancy
+                "poignancy": poignancy,
             }
         except Exception:
             return None
 
-    def _extract_chat_node(self, node: Any) -> Optional[Dict[str, Any]]:
+    def _extract_chat_node(self, node: Any) -> Optional[dict[str, Any]]:
         """
         Extract a chat/conversation node into a dictionary.
 
@@ -442,27 +446,27 @@ Search the memory database and return a memory package if relevant memories exis
         try:
             # Get date with safe fallback
             date_str = "unknown"
-            if hasattr(node, 'created'):
+            if hasattr(node, "created"):
                 try:
                     date_str = node.created.strftime("%Y-%m-%d %H:%M")
                 except (AttributeError, ValueError):
                     date_str = str(node.created)
 
             # Get description
-            description = getattr(node, 'description', 'conversation')
+            description = getattr(node, "description", "conversation")
 
             # Get transcript (full for retriever to summarize)
-            transcript = getattr(node, 'filling', [])
+            transcript = getattr(node, "filling", [])
 
             # Get poignancy (importance score) - chats default to higher
-            poignancy = getattr(node, 'poignancy', 5)
+            poignancy = getattr(node, "poignancy", 5)
 
             return {
                 "type": "chat",
                 "date": date_str,
                 "description": description,
                 "transcript": transcript,
-                "poignancy": poignancy
+                "poignancy": poignancy,
             }
         except Exception:
             return None
@@ -487,12 +491,17 @@ Search the memory database and return a memory package if relevant memories exis
         # Build command with sandboxing
         # Note: --allowedTools "" disables all tool access
         cmd = [
-            "claude", "-p",
-            "--output-format", "json",
-            "--model", "sonnet",  # Fast, cheap, good enough for retrieval
-            "--allowedTools", "",  # CRITICAL: No tools - completely sandboxed
-            "--system-prompt", system_prompt,
-            prompt
+            "claude",
+            "-p",
+            "--output-format",
+            "json",
+            "--model",
+            "sonnet",  # Fast, cheap, good enough for retrieval
+            "--allowedTools",
+            "",  # CRITICAL: No tools - completely sandboxed
+            "--system-prompt",
+            system_prompt,
+            prompt,
         ]
 
         try:
@@ -500,7 +509,7 @@ Search the memory database and return a memory package if relevant memories exis
                 cmd,
                 capture_output=True,
                 text=True,
-                timeout=60  # 60 second timeout
+                timeout=60,  # 60 second timeout
             )
 
             if result.returncode != 0:
@@ -535,7 +544,7 @@ Search the memory database and return a memory package if relevant memories exis
         self.recent_interactions.clear()
         self.visited_locations.clear()
 
-    def get_session_summary(self) -> Dict[str, Any]:
+    def get_session_summary(self) -> dict[str, Any]:
         """
         Get a summary of the current session's tracking state.
 
@@ -547,5 +556,5 @@ Search the memory database and return a memory package if relevant memories exis
         return {
             "recent_interactions": list(self.recent_interactions),
             "visited_locations": list(self.visited_locations),
-            "persona_name": self._get_persona_name()
+            "persona_name": self._get_persona_name(),
         }

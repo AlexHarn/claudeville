@@ -54,6 +54,10 @@ dependencies:
     # Other utilities
     - trueskill>=0.4.5
 
+    # Development tools
+    - pre-commit>=3.6.0
+    - ruff>=0.1.9
+
 # Note: The following have been intentionally REMOVED:
 # - openai (replaced by Claude CLI)
 # - sentence-transformers (embeddings replaced by Sonnet retrieval)

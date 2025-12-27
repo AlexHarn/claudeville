@@ -18,8 +18,6 @@ Original: Joon Sung Park (joonspk@stanford.edu)
 import json
 import subprocess
 import time
-import re
-
 
 SYSTEM_PROMPT = """You are a response generator for a simulation.
 CRITICAL: Output ONLY the exact requested format. No explanations, no preamble, no "I see" or "Based on", no conversational text.
@@ -77,6 +75,7 @@ def _run_claude_cli(prompt, model="sonnet", system_prompt=None):
 # #####################[SECTION 1: CLAUDE STRUCTURE] #########################
 # ============================================================================
 
+
 def Claude_single_request(prompt):
     """
     Make a single request to Claude using Sonnet model.
@@ -127,14 +126,16 @@ def Claude_sonnet_request(prompt):
         return "Claude Sonnet ERROR"
 
 
-def Claude_opus_safe_generate_response(prompt,
-                                       example_output,
-                                       special_instruction,
-                                       repeat=3,
-                                       fail_safe_response="error",
-                                       func_validate=None,
-                                       func_clean_up=None,
-                                       verbose=False):  # verbose kept for signature compat, but ignored
+def Claude_opus_safe_generate_response(
+    prompt,
+    example_output,
+    special_instruction,
+    repeat=3,
+    fail_safe_response="error",
+    func_validate=None,
+    func_clean_up=None,
+    verbose=False,
+):  # verbose kept for signature compat, but ignored
     """
     Generate a response using Opus with validation and retry logic.
 
@@ -152,14 +153,16 @@ def Claude_opus_safe_generate_response(prompt,
         Cleaned response if valid, fail_safe_response otherwise
     """
     prompt = 'Prompt:\n"""\n' + prompt + '\n"""\n'
-    prompt += f"Output the response to the prompt above in json. {special_instruction}\n"
+    prompt += (
+        f"Output the response to the prompt above in json. {special_instruction}\n"
+    )
     prompt += "Example output json:\n"
     prompt += '{"output": "' + str(example_output) + '"}'
 
     for i in range(repeat):
         try:
             curr_response = Claude_opus_request(prompt).strip()
-            end_index = curr_response.rfind('}') + 1
+            end_index = curr_response.rfind("}") + 1
             curr_response = curr_response[:end_index]
             curr_response = json.loads(curr_response)["output"]
 
@@ -173,14 +176,16 @@ def Claude_opus_safe_generate_response(prompt,
     return fail_safe_response
 
 
-def Claude_safe_generate_response(prompt,
-                                  example_output,
-                                  special_instruction,
-                                  repeat=3,
-                                  fail_safe_response="error",
-                                  func_validate=None,
-                                  func_clean_up=None,
-                                  verbose=False):  # verbose kept for signature compat, but ignored
+def Claude_safe_generate_response(
+    prompt,
+    example_output,
+    special_instruction,
+    repeat=3,
+    fail_safe_response="error",
+    func_validate=None,
+    func_clean_up=None,
+    verbose=False,
+):  # verbose kept for signature compat, but ignored
     """
     Generate a response using Sonnet with validation and retry logic.
 
@@ -198,14 +203,16 @@ def Claude_safe_generate_response(prompt,
         Cleaned response if valid, fail_safe_response otherwise
     """
     prompt = '"""\n' + prompt + '\n"""\n'
-    prompt += f"Output the response to the prompt above in json. {special_instruction}\n"
+    prompt += (
+        f"Output the response to the prompt above in json. {special_instruction}\n"
+    )
     prompt += "Example output json:\n"
     prompt += '{"output": "' + str(example_output) + '"}'
 
     for i in range(repeat):
         try:
             curr_response = Claude_sonnet_request(prompt).strip()
-            end_index = curr_response.rfind('}') + 1
+            end_index = curr_response.rfind("}") + 1
             curr_response = curr_response[:end_index]
             curr_response = json.loads(curr_response)["output"]
 
@@ -223,6 +230,7 @@ def Claude_safe_generate_response(prompt,
 # ###################[SECTION 2: PROMPT GENERATION] ##########################
 # ============================================================================
 
+
 def generate_prompt(curr_input, prompt_lib_file):
     """
     Takes in the current input (e.g. comment that you want to classify) and
@@ -239,7 +247,7 @@ def generate_prompt(curr_input, prompt_lib_file):
     RETURNS:
         a str prompt that will be sent to Claude.
     """
-    if type(curr_input) == type("string"):
+    if isinstance(curr_input, str):
         curr_input = [curr_input]
     curr_input = [str(i) for i in curr_input]
 
@@ -255,12 +263,14 @@ def generate_prompt(curr_input, prompt_lib_file):
     return prompt.strip()
 
 
-def safe_generate_response(prompt,
-                           repeat=5,
-                           fail_safe_response="error",
-                           func_validate=None,
-                           func_clean_up=None,
-                           verbose=False):
+def safe_generate_response(
+    prompt,
+    repeat=5,
+    fail_safe_response="error",
+    func_validate=None,
+    func_clean_up=None,
+    verbose=False,
+):
     """
     Generate a response with validation and retry logic.
 
@@ -311,7 +321,7 @@ GPT4_safe_generate_response = Claude_opus_safe_generate_response
 # ###################[SECTION 4: TESTING] ####################################
 # ============================================================================
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     # Test basic functionality
     curr_input = ["driving to a friend's house"]
     prompt_lib_file = "prompt_template/test_prompt_July5.txt"
@@ -330,17 +340,21 @@ if __name__ == '__main__':
             cleaned_response = response.strip()
             return cleaned_response
 
-        output = safe_generate_response(prompt,
-                                        None,  # gpt_parameter ignored
-                                        5,
-                                        "rest",
-                                        __func_validate,
-                                        __func_clean_up,
-                                        True)
+        output = safe_generate_response(
+            prompt,
+            None,  # gpt_parameter ignored
+            5,
+            "rest",
+            __func_validate,
+            __func_clean_up,
+            True,
+        )
 
         print(output)
 
     except FileNotFoundError:
         print("Test prompt file not found. Testing basic Claude request...")
-        response = Claude_single_request("Say 'Hello, Claudeville!' in exactly those words.")
+        response = Claude_single_request(
+            "Say 'Hello, Claudeville!' in exactly those words."
+        )
         print(f"Response: {response}")

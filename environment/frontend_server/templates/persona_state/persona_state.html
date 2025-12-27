@@ -159,28 +159,28 @@
 				  	<!-- || -->
 				  	<!-- Expiration: {{ node_details.expiration }} -->
 				  	<!-- <br> -->
-				  	<!-- S, P, O 
-				  	 node_details.subject , 
-				  	 node_details.predicate , 
-				  	 node_details.object 
+				  	<!-- S, P, O
+				  	 node_details.subject ,
+				  	 node_details.predicate ,
+				  	 node_details.object
 				  	<br> -->
 				  	<!-- Description: {{ node_details.description }} -->
 				  	<!-- <br> -->
 				  	<!-- Keywords: {{ node_details.keywords }} -->
 				  	<!-- <br> -->
 				  	<!-- Filling: {{ node_details.filling }} -->
-				  </p> 
-				   
+				  </p>
+
 			  {% endfor %}
 			</div>
 			<br>
 
-			
+
 			<h4 style="font-size:1.45em"><strong>Agent's Conversation History</strong></h4>
 			<div class="" style="width:100%">
 			  {% for node_details in a_mem_chat %}
 				  <p>
-				  	Created: {{ node_details.created }} 
+				  	Created: {{ node_details.created }}
 				  	<br>
 				  	Description: {{ node_details.description }}
 				  	<br>
@@ -188,7 +188,7 @@
 				  	{% for name, utt in node_details.filling %}
 				  	<span style="font-style: italic;">{{ name }}</span>: {{ utt }}<br>
 				  	{% endfor %}
-				  </p> 
+				  </p>
 			  {% endfor %}
 			</div>
 			<br>
@@ -197,11 +197,11 @@
 			<div class="" style="width:100%">
 			  {% for node_details in a_mem_thought %}
 				  <p>
-				  	[node_{{ node_details.node_count }}] {{ node_details.created }}: <strong>{{ node_details.description }}</strong> 
+				  	[node_{{ node_details.node_count }}] {{ node_details.created }}: <strong>{{ node_details.description }}</strong>
 
 				  	<br>(Depth: {{ node_details.depth }}; Evidence: {{ node_details.filling }})
-				  	
-				  </p> 
+
+				  </p>
 			  {% endfor %}
 			</div>
 			<br>
@@ -212,36 +212,3 @@
   </div>
 </div>
 {% endblock content %}
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-

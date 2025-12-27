@@ -1,16 +1,26 @@
 # Local configuration
 local_config.json
-
-reverie/backend_server/utils.py
 frontend_server/settings/local.py
 
 # Claude Code / Agent
 .claude/
 CLAUDE.md
 
+# IDE
+.vscode/
+
 # Storage - ignore runs, keep base templates
-storage/runs/*
-!storage/runs/.gitkeep
+environment/frontend_server/storage/runs/*
+!environment/frontend_server/storage/runs/.gitkeep
+
+# Compressed storage - generated output, ignore all
+environment/frontend_server/compressed_storage/*
+!environment/frontend_server/compressed_storage/.gitkeep
+
+# Temp storage - all runtime files ignored (created on first run)
+environment/frontend_server/temp_storage/*
+!environment/frontend_server/temp_storage/.gitkeep
+
 static_dirs/*
 
 bin/

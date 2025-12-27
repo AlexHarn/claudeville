@@ -1,0 +1,22 @@
+# Ruff configuration for Claudeville
+
+[lint]
+# Select rules to enable
+select = [
+    "E",   # pycodestyle errors
+    "F",   # pyflakes
+    "W",   # pycodestyle warnings
+]
+
+# Ignore rules globally
+ignore = [
+    "E501",   # Line too long - enforced by ruff-format when possible
+]
+
+# Per-file ignores
+[lint.per-file-ignores]
+# Ignore E402 (module level import not at top of file) in files that need sys.path manipulation
+"reverie/backend_server/persona/**/*.py" = ["E402"]
+"reverie/backend_server/persona/prompt_template/*.py" = ["E402"]
+"reverie/backend_server/persona/memory_structures/*.py" = ["E402"]
+"reverie/backend_server/persona/cognitive_modules/*.py" = ["E402"]
