@@ -1,4 +1,4 @@
-{% load staticfiles %}
+{% load static %}
 
 <div id="step" style="display:none">{{step}}</div>
 <div id="sim_code" style="display:none">{{sim_code}}</div>
@@ -169,17 +169,30 @@
 	  // Joon: This is the export json file you get from Tiled. 
 	  this.load.tilemapTiledJSON("map", "{% static 'assets/the_ville/visuals/the_ville_jan7.json' %}");
 
-	  // An atlas is a way to pack multiple images together into one texture. I'm 
-	  // using it to load all the player animations (walking left, walking right, 
+	  // An atlas is a way to pack multiple images together into one texture. I'm
+	  // using it to load all the player animations (walking left, walking right,
 	  // etc.) in one image. For more info see:
 	  // https://labs.phaser.io/view.html?src=src/animation/texture%20atlas%20animation.js
-	  // If you don't use an atlas, you can do the same thing with a spritesheet, 
+	  // If you don't use an atlas, you can do the same thing with a spritesheet,
 	  // see: https://labs.phaser.io/view.html?src=src/animation/single%20sprite%20sheet.js
-	  // Joon: Technically, I think this guy had the best tutorial for atlas: 
+	  // Joon: Technically, I think this guy had the best tutorial for atlas:
 	  //       https://www.youtube.com/watch?v=fdXcD9X4NrQ&ab_channel=MorganPage
-	  this.load.atlas("atlas", 
-	                  "https://mikewesthad.github.io/phaser-3-tilemap-blog-posts/post-1/assets/atlas/atlas.png", 
+
+	  // Load the fallback misa atlas for camera player and any missing personas
+	  this.load.atlas("atlas",
+	                  "https://mikewesthad.github.io/phaser-3-tilemap-blog-posts/post-1/assets/atlas/atlas.png",
 	                  "https://mikewesthad.github.io/phaser-3-tilemap-blog-posts/post-1/assets/atlas/atlas.json");
+
+	  // Load unique character sprite sheets for each persona
+	  // Each character PNG is a 96x128 spritesheet (3 cols x 4 rows of 32x32 frames)
+	  // Rows: down, left, right, up
+	  for (let persona_name in persona_names) {
+	    let sprite_key = persona_name.replace(/ /g, "_");
+	    this.load.spritesheet(sprite_key,
+	      "{% static 'assets/characters/' %}" + sprite_key + ".png",
+	      { frameWidth: 32, frameHeight: 32 }
+	    );
+	  }
 	}
 
 	function create() {  
@@ -276,33 +289,80 @@
 	  camera.setBounds(0, 0, map.widthInPixels, map.heightInPixels);
 	  cursors = this.input.keyboard.createCursorKeys();
 
-	  // *** SET UP PERSONAS *** 
-	  // We start by creating the game sprite objects. 
-	  for (let i=0; i<Object.keys(spawn_tile_loc).length; i++) { 
+	  // *** SET UP PERSONAS ***
+	  // We start by creating the game sprite objects.
+	  const anims = this.anims;
+
+	  for (let i=0; i<Object.keys(spawn_tile_loc).length; i++) {
 	    let persona_name = Object.keys(spawn_tile_loc)[i];
-	    let start_pos = [spawn_tile_loc[persona_name][0] * tile_width + tile_width / 2, 
+	    let sprite_key = persona_name.replace(/ /g, "_");
+	    let start_pos = [spawn_tile_loc[persona_name][0] * tile_width + tile_width / 2,
 	                     spawn_tile_loc[persona_name][1] * tile_width + tile_width];
-	    let new_sprite = this.physics.add
-	                         .sprite(start_pos[0], start_pos[1], "atlas", "misa-front")
-	                         .setSize(30, 40)
-	                         .setOffset(0, 32); // DEBUG 1 --- I added 32 offset on Dec 29. 
+
+	    // Check if persona-specific spritesheet exists, otherwise fall back to misa
+	    let new_sprite;
+	    if (this.textures.exists(sprite_key)) {
+	      // Use persona-specific sprite (frame 1 is the front-facing idle frame)
+	      new_sprite = this.physics.add
+	                       .sprite(start_pos[0], start_pos[1], sprite_key, 1)
+	                       .setSize(30, 40)
+	                       .setOffset(0, 32);
+
+	      // Create persona-specific animations
+	      // Spritesheet layout (96x128 = 3 cols x 4 rows):
+	      // Row 0 (frames 0-2): down/front walk
+	      // Row 1 (frames 3-5): left walk
+	      // Row 2 (frames 6-8): right walk
+	      // Row 3 (frames 9-11): up/back walk
+	      anims.create({
+	        key: sprite_key + "-front-walk",
+	        frames: anims.generateFrameNumbers(sprite_key, { frames: [0, 1, 2, 1] }),
+	        frameRate: 4,
+	        repeat: -1 });
+
+	      anims.create({
+	        key: sprite_key + "-left-walk",
+	        frames: anims.generateFrameNumbers(sprite_key, { frames: [3, 4, 5, 4] }),
+	        frameRate: 4,
+	        repeat: -1 });
+
+	      anims.create({
+	        key: sprite_key + "-right-walk",
+	        frames: anims.generateFrameNumbers(sprite_key, { frames: [6, 7, 8, 7] }),
+	        frameRate: 4,
+	        repeat: -1 });
+
+	      anims.create({
+	        key: sprite_key + "-back-walk",
+	        frames: anims.generateFrameNumbers(sprite_key, { frames: [9, 10, 11, 10] }),
+	        frameRate: 4,
+	        repeat: -1 });
+	    } else {
+	      // Fall back to misa atlas for missing personas
+	      new_sprite = this.physics.add
+	                       .sprite(start_pos[0], start_pos[1], "atlas", "misa-front")
+	                       .setSize(30, 40)
+	                       .setOffset(0, 32);
+	    }
+
 	    // Here, we are creating the persona and its pronunciatio sprites.
 	    personas[persona_name] = new_sprite;
+	    // Store the sprite key for animation lookups
+	    personas[persona_name].spriteKey = this.textures.exists(sprite_key) ? sprite_key : null;
+
 	    pronunciatios[persona_name] = this.add.text(
-	                                   new_sprite.body.x - 6, 
-	                                   new_sprite.body.y - 42 - 32, // DEBUG 1 --- I added 32 offset on Dec 29. 
+	                                   new_sprite.body.x - 6,
+	                                   new_sprite.body.y - 42 - 32, // DEBUG 1 --- I added 32 offset on Dec 29.
 	                                   "🦁", {
-	                                   font: "28px monospace", 
-	                                   fill: "#000000", 
-	                                   padding: { x: 8, y: 8}, 
+	                                   font: "28px monospace",
+	                                   fill: "#000000",
+	                                   padding: { x: 8, y: 8},
 	                                   backgroundColor: "#ffffff",
 	                                   border:"solid",
 	                                   borderRadius:"10px"}).setDepth(3);
 	  }
 
-	  // Create the player's walking animations from the texture atlas. These are
-	  // stored in the global animation manager so any sprite can access them.
-	  const anims = this.anims;
+	  // Create the misa walking animations as fallback (used for camera and missing personas)
 	  anims.create({
 	    key: "misa-left-walk",
 	    frames: anims.generateFrameNames("atlas", { prefix: "misa-left-walk.", start: 0, end: 3, zeroPad: 3 }),
@@ -483,22 +543,35 @@
 	        curr_pronunciatio.x = curr_persona.body.x - 6; 
           curr_pronunciatio.y = curr_persona.body.y - 42 - 32; // DEBUG 1 --- I added 32 offset on Dec 29. 
 
+          // Use persona-specific animations if available, otherwise fall back to misa
+          let animKey = curr_persona.spriteKey || "misa";
+
           if (anims_direction == "l") {
-			      curr_persona.anims.play("misa-left-walk", true);
+			      curr_persona.anims.play(animKey + "-left-walk", true);
 			    } else if (anims_direction == "r") {
-			      curr_persona.anims.play("misa-right-walk", true);
+			      curr_persona.anims.play(animKey + "-right-walk", true);
 			    } else if (anims_direction == "u") {
-			      curr_persona.anims.play("misa-back-walk", true);
+			      curr_persona.anims.play(animKey + "-back-walk", true);
 			    } else if (anims_direction == "d") {
-			      curr_persona.anims.play("misa-front-walk", true);
+			      curr_persona.anims.play(animKey + "-front-walk", true);
 			    } else {
 			      curr_persona.anims.stop();
 
 			      // If we were moving, pick an idle frame to use
-			      if (pre_anims_direction_dict[curr_persona_name] == "l") curr_persona.setTexture("atlas", "misa-left");else
-			      if (pre_anims_direction_dict[curr_persona_name] == "r") curr_persona.setTexture("atlas", "misa-right");else
-			      if (pre_anims_direction_dict[curr_persona_name] == "u") curr_persona.setTexture("atlas", "misa-back");else
-			      if (pre_anims_direction_dict[curr_persona_name] == "d") curr_persona.setTexture("atlas", "misa-front");
+			      if (curr_persona.spriteKey) {
+			        // Persona-specific sprite: use frame numbers for idle poses
+			        // Row 0: front (frame 1), Row 1: left (frame 4), Row 2: right (frame 7), Row 3: back (frame 10)
+			        if (pre_anims_direction_dict[curr_persona_name] == "l") curr_persona.setFrame(4);else
+			        if (pre_anims_direction_dict[curr_persona_name] == "r") curr_persona.setFrame(7);else
+			        if (pre_anims_direction_dict[curr_persona_name] == "u") curr_persona.setFrame(10);else
+			        if (pre_anims_direction_dict[curr_persona_name] == "d") curr_persona.setFrame(1);
+			      } else {
+			        // Fallback to misa atlas
+			        if (pre_anims_direction_dict[curr_persona_name] == "l") curr_persona.setTexture("atlas", "misa-left");else
+			        if (pre_anims_direction_dict[curr_persona_name] == "r") curr_persona.setTexture("atlas", "misa-right");else
+			        if (pre_anims_direction_dict[curr_persona_name] == "u") curr_persona.setTexture("atlas", "misa-back");else
+			        if (pre_anims_direction_dict[curr_persona_name] == "d") curr_persona.setTexture("atlas", "misa-front");
+			      }
 			    };
 
 	      } 

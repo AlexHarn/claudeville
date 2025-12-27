@@ -152,9 +152,9 @@ class Scratch:
     # scratch.planned_path.
     self.act_path_set = False
     # <planned_path> is a list of x y coordinate tuples (tiles) that describe
-    # the path the persona is to take to execute the <curr_action>. 
-    # The list does not include the persona's current tile, and includes the 
-    # destination tile. 
+    # the path the persona is to take to execute the <curr_action>.
+    # The list does not include the persona's current tile, and includes the
+    # destination tile.
     # e.g., [(50, 10), (49, 10), (48, 10), ...]
     self.planned_path = []
 
@@ -307,7 +307,7 @@ class Scratch:
     scratch["planned_path"] = self.planned_path
 
     with open(out_json, "w") as outfile:
-      json.dump(scratch, outfile, indent=2) 
+      json.dump(scratch, outfile, indent=2)
 
 
   def get_f_daily_schedule_index(self, advance=0):

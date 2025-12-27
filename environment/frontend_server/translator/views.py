@@ -14,7 +14,7 @@ from django.shortcuts import render, redirect, HttpResponseRedirect
 from django.http import HttpResponse, JsonResponse
 from global_methods import *
 
-from django.contrib.staticfiles.templatetags.staticfiles import static
+from django.templatetags.static import static
 from .models import *
 
 def landing(request): 
@@ -114,14 +114,14 @@ def home(request):
   with open(f_curr_sim_code) as json_file:  
     sim_code = json.load(json_file)["sim_code"]
   
-  with open(f_curr_step) as json_file:  
+  with open(f_curr_step) as json_file:
     step = json.load(json_file)["step"]
 
-  os.remove(f_curr_step)
+  # NOTE: Removed os.remove(f_curr_step) - keep file so browser refresh works
 
   persona_names = []
   persona_names_set = set()
-  for i in find_filenames(f"storage/{sim_code}/personas", ""): 
+  for i in find_filenames(f"storage/runs/{sim_code}/personas", ""): 
     x = i.split("/")[-1].strip()
     if x[0] != ".": 
       persona_names += [[x, x.replace(" ", "_")]]
@@ -129,11 +129,11 @@ def home(request):
 
   persona_init_pos = []
   file_count = []
-  for i in find_filenames(f"storage/{sim_code}/environment", ".json"):
+  for i in find_filenames(f"storage/runs/{sim_code}/environment", ".json"):
     x = i.split("/")[-1].strip()
     if x[0] != ".": 
       file_count += [int(x.split(".")[0])]
-  curr_json = f'storage/{sim_code}/environment/{str(max(file_count))}.json'
+  curr_json = f'storage/runs/{sim_code}/environment/{str(max(file_count))}.json'
   with open(curr_json) as json_file:  
     persona_init_pos_dict = json.load(json_file)
     for key, val in persona_init_pos_dict.items(): 
@@ -155,7 +155,7 @@ def replay(request, sim_code, step):
 
   persona_names = []
   persona_names_set = set()
-  for i in find_filenames(f"storage/{sim_code}/personas", ""): 
+  for i in find_filenames(f"storage/runs/{sim_code}/personas", ""): 
     x = i.split("/")[-1].strip()
     if x[0] != ".": 
       persona_names += [[x, x.replace(" ", "_")]]
@@ -163,11 +163,11 @@ def replay(request, sim_code, step):
 
   persona_init_pos = []
   file_count = []
-  for i in find_filenames(f"storage/{sim_code}/environment", ".json"):
+  for i in find_filenames(f"storage/runs/{sim_code}/environment", ".json"):
     x = i.split("/")[-1].strip()
     if x[0] != ".": 
       file_count += [int(x.split(".")[0])]
-  curr_json = f'storage/{sim_code}/environment/{str(max(file_count))}.json'
+  curr_json = f'storage/runs/{sim_code}/environment/{str(max(file_count))}.json'
   with open(curr_json) as json_file:  
     persona_init_pos_dict = json.load(json_file)
     for key, val in persona_init_pos_dict.items(): 
@@ -189,7 +189,7 @@ def replay_persona_state(request, sim_code, step, persona_name):
 
   persona_name_underscore = persona_name
   persona_name = " ".join(persona_name.split("_"))
-  memory = f"storage/{sim_code}/personas/{persona_name}/bootstrap_memory"
+  memory = f"storage/runs/{sim_code}/personas/{persona_name}/bootstrap_memory"
   if not os.path.exists(memory): 
     memory = f"compressed_storage/{sim_code}/personas/{persona_name}/bootstrap_memory"
 
@@ -259,7 +259,7 @@ def process_environment(request):
   sim_code = data["sim_code"]
   environment = data["environment"]
 
-  with open(f"storage/{sim_code}/environment/{step}.json", "w") as outfile:
+  with open(f"storage/runs/{sim_code}/environment/{step}.json", "w") as outfile:
     outfile.write(json.dumps(environment, indent=2))
 
   return HttpResponse("received")
@@ -287,8 +287,8 @@ def update_environment(request):
   sim_code = data["sim_code"]
 
   response_data = {"<step>": -1}
-  if (check_if_file_exists(f"storage/{sim_code}/movement/{step}.json")):
-    with open(f"storage/{sim_code}/movement/{step}.json") as json_file: 
+  if (check_if_file_exists(f"storage/runs/{sim_code}/movement/{step}.json")):
+    with open(f"storage/runs/{sim_code}/movement/{step}.json") as json_file: 
       response_data = json.load(json_file)
       response_data["<step>"] = step
 

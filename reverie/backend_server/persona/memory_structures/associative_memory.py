@@ -62,7 +62,7 @@ class AssociativeMemory:
     self.kw_strength_event = dict()
     self.kw_strength_thought = dict()
 
-    self.embeddings = json.load(open(f_saved + "/embeddings.json"))
+    # NOTE: Embeddings have been removed - SubconsciousRetriever handles semantic retrieval
 
     nodes_load = json.load(open(f_saved + "/nodes.json"))
     for count in range(len(nodes_load.keys())): 
@@ -86,21 +86,21 @@ class AssociativeMemory:
       o = node_details["object"]
 
       description = node_details["description"]
-      embedding_pair = (node_details["embedding_key"], 
-                        self.embeddings[node_details["embedding_key"]])
-      poignancy =node_details["poignancy"]
+      # NOTE: Embeddings removed - just use the embedding_key as description identifier
+      embedding_key = node_details["embedding_key"]
+      poignancy = node_details["poignancy"]
       keywords = set(node_details["keywords"])
       filling = node_details["filling"]
       
-      if node_type == "event": 
-        self.add_event(created, expiration, s, p, o, 
-                   description, keywords, poignancy, embedding_pair, filling)
-      elif node_type == "chat": 
-        self.add_chat(created, expiration, s, p, o, 
-                   description, keywords, poignancy, embedding_pair, filling)
-      elif node_type == "thought": 
-        self.add_thought(created, expiration, s, p, o, 
-                   description, keywords, poignancy, embedding_pair, filling)
+      if node_type == "event":
+        self.add_event(created, expiration, s, p, o,
+                   description, keywords, poignancy, embedding_key, filling)
+      elif node_type == "chat":
+        self.add_chat(created, expiration, s, p, o,
+                   description, keywords, poignancy, embedding_key, filling)
+      elif node_type == "thought":
+        self.add_thought(created, expiration, s, p, o,
+                   description, keywords, poignancy, embedding_key, filling)
 
     kw_strength_load = json.load(open(f_saved + "/kw_strength.json"))
     if kw_strength_load["kw_strength_event"]: 
@@ -146,13 +146,12 @@ class AssociativeMemory:
     with open(out_json+"/kw_strength.json", "w") as outfile:
       json.dump(r, outfile)
 
-    with open(out_json+"/embeddings.json", "w") as outfile:
-      json.dump(self.embeddings, outfile)
+    # NOTE: embeddings.json is no longer saved - SubconsciousRetriever handles semantic retrieval
 
 
-  def add_event(self, created, expiration, s, p, o, 
-                      description, keywords, poignancy, 
-                      embedding_pair, filling):
+  def add_event(self, created, expiration, s, p, o,
+                      description, keywords, poignancy,
+                      embedding_key, filling):
     # Setting up the node ID and counts.
     node_count = len(self.id_to_node.keys()) + 1
     type_count = len(self.seq_event) + 1
@@ -160,89 +159,91 @@ class AssociativeMemory:
     node_id = f"node_{str(node_count)}"
     depth = 0
 
-    # Node type specific clean up. 
-    if "(" in description: 
-      description = (" ".join(description.split()[:3]) 
-                     + " " 
-                     +  description.split("(")[-1][:-1])
+    # Node type specific clean up.
+    if "(" in description:
+      description = (" ".join(description.split()[:3])
+                     + " "
+                     + description.split("(")[-1][:-1])
 
     # Creating the <ConceptNode> object.
+    # NOTE: embedding_key is now just a string identifier, not a key to embeddings dict
     node = ConceptNode(node_id, node_count, type_count, node_type, depth,
-                       created, expiration, 
-                       s, p, o, 
-                       description, embedding_pair[0], 
+                       created, expiration,
+                       s, p, o,
+                       description, embedding_key,
                        poignancy, keywords, filling)
 
-    # Creating various dictionary cache for fast access. 
+    # Creating various dictionary cache for fast access.
     self.seq_event[0:0] = [node]
     keywords = [i.lower() for i in keywords]
-    for kw in keywords: 
-      if kw in self.kw_to_event: 
+    for kw in keywords:
+      if kw in self.kw_to_event:
         self.kw_to_event[kw][0:0] = [node]
-      else: 
+      else:
         self.kw_to_event[kw] = [node]
-    self.id_to_node[node_id] = node 
+    self.id_to_node[node_id] = node
 
     # Adding in the kw_strength
-    if f"{p} {o}" != "is idle":  
-      for kw in keywords: 
-        if kw in self.kw_strength_event: 
+    if f"{p} {o}" != "is idle":
+      for kw in keywords:
+        if kw in self.kw_strength_event:
           self.kw_strength_event[kw] += 1
-        else: 
+        else:
           self.kw_strength_event[kw] = 1
 
-    self.embeddings[embedding_pair[0]] = embedding_pair[1]
+    # NOTE: Embedding storage removed - SubconsciousRetriever handles semantic retrieval
 
     return node
 
 
-  def add_thought(self, created, expiration, s, p, o, 
-                        description, keywords, poignancy, 
-                        embedding_pair, filling):
+  def add_thought(self, created, expiration, s, p, o,
+                        description, keywords, poignancy,
+                        embedding_key, filling):
     # Setting up the node ID and counts.
     node_count = len(self.id_to_node.keys()) + 1
     type_count = len(self.seq_thought) + 1
     node_type = "thought"
     node_id = f"node_{str(node_count)}"
-    depth = 1 
-    try: 
-      if filling: 
+    depth = 1
+    try:
+      if filling:
         depth += max([self.id_to_node[i].depth for i in filling])
-    except: 
+    except:
       pass
 
     # Creating the <ConceptNode> object.
+    # NOTE: embedding_key is now just a string identifier, not a key to embeddings dict
     node = ConceptNode(node_id, node_count, type_count, node_type, depth,
-                       created, expiration, 
-                       s, p, o, 
-                       description, embedding_pair[0], poignancy, keywords, filling)
+                       created, expiration,
+                       s, p, o,
+                       description, embedding_key, poignancy, keywords, filling)
 
-    # Creating various dictionary cache for fast access. 
+    # Creating various dictionary cache for fast access.
     self.seq_thought[0:0] = [node]
     keywords = [i.lower() for i in keywords]
-    for kw in keywords: 
-      if kw in self.kw_to_thought: 
+    for kw in keywords:
+      if kw in self.kw_to_thought:
         self.kw_to_thought[kw][0:0] = [node]
-      else: 
+      else:
         self.kw_to_thought[kw] = [node]
-    self.id_to_node[node_id] = node 
+    self.id_to_node[node_id] = node
 
     # Adding in the kw_strength
-    if f"{p} {o}" != "is idle":  
-      for kw in keywords: 
-        if kw in self.kw_strength_thought: 
+    if f"{p} {o}" != "is idle":
+      for kw in keywords:
+        if kw in self.kw_strength_thought:
           self.kw_strength_thought[kw] += 1
-        else: 
+        else:
           self.kw_strength_thought[kw] = 1
 
-    self.embeddings[embedding_pair[0]] = embedding_pair[1]
+    # NOTE: Embedding storage removed - SubconsciousRetriever handles semantic retrieval
 
     return node
 
 
-  def add_chat(self, created, expiration, s, p, o, 
-                     description, keywords, poignancy, 
-                     embedding_pair, filling): 
+  def add_chat(self, created, expiration, s, p, o,
+                     description, keywords, poignancy,
+                     embedding_key, filling):
     # Setting up the node ID and counts.
     node_count = len(self.id_to_node.keys()) + 1
     type_count = len(self.seq_chat) + 1
@@ -251,23 +252,24 @@ class AssociativeMemory:
     depth = 0
 
     # Creating the <ConceptNode> object.
+    # NOTE: embedding_key is now just a string identifier, not a key to embeddings dict
     node = ConceptNode(node_id, node_count, type_count, node_type, depth,
-                       created, expiration, 
-                       s, p, o, 
-                       description, embedding_pair[0], poignancy, keywords, filling)
+                       created, expiration,
+                       s, p, o,
+                       description, embedding_key, poignancy, keywords, filling)
 
-    # Creating various dictionary cache for fast access. 
+    # Creating various dictionary cache for fast access.
     self.seq_chat[0:0] = [node]
     keywords = [i.lower() for i in keywords]
-    for kw in keywords: 
-      if kw in self.kw_to_chat: 
+    for kw in keywords:
+      if kw in self.kw_to_chat:
         self.kw_to_chat[kw][0:0] = [node]
-      else: 
+      else:
         self.kw_to_chat[kw] = [node]
-    self.id_to_node[node_id] = node 
+    self.id_to_node[node_id] = node
 
-    self.embeddings[embedding_pair[0]] = embedding_pair[1]
-        
+    # NOTE: Embedding storage removed - SubconsciousRetriever handles semantic retrieval
+
     return node
 
 

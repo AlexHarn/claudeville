@@ -8,10 +8,7 @@ import sys
 sys.path.append('../../')
 
 from global_methods import *
-from persona.prompt_template.gpt_structure import *
-
-from numpy import dot
-from numpy.linalg import norm
+from persona.prompt_template.claude_structure import *
 
 def retrieve(persona, perceived): 
   """
@@ -44,27 +41,6 @@ def retrieve(persona, perceived):
     retrieved[event.description]["thoughts"] = list(relevant_thoughts)
     
   return retrieved
-
-
-def cos_sim(a, b): 
-  """
-  This function calculates the cosine similarity between two input vectors 
-  'a' and 'b'. Cosine similarity is a measure of similarity between two 
-  non-zero vectors of an inner product space that measures the cosine 
-  of the angle between them.
-
-  INPUT: 
-    a: 1-D array object 
-    b: 1-D array object 
-  OUTPUT: 
-    A scalar value representing the cosine similarity between the input 
-    vectors 'a' and 'b'.
-  
-  Example input: 
-    a = [0.3, 0.2, 0.5]
-    b = [0.2, 0.2, 0.5]
-  """
-  return dot(a, b)/(norm(a)*norm(b))
 
 
 def normalize_dict_floats(d, target_min, target_max):
@@ -172,30 +148,6 @@ def extract_importance(persona, nodes):
   return importance_out
 
 
-def extract_relevance(persona, nodes, focal_pt): 
-  """
-  Gets the current Persona object, a list of nodes that are in a 
-  chronological order, and the focal_pt string and outputs a dictionary 
-  that has the relevance score calculated.
-
-  INPUT: 
-    persona: Current persona whose memory we are retrieving. 
-    nodes: A list of Node object in a chronological order. 
-    focal_pt: A string describing the current thought of revent of focus.  
-  OUTPUT: 
-    relevance_out: A dictionary whose keys are the node.node_id and whose values
-                 are the float that represents the relevance score. 
-  """
-  focal_embedding = get_embedding(focal_pt)
-
-  relevance_out = dict()
-  for count, node in enumerate(nodes): 
-    node_embedding = persona.a_mem.embeddings[node.embedding_key]
-    relevance_out[node.node_id] = cos_sim(node_embedding, focal_embedding)
-
-  return relevance_out
-
-
 def new_retrieve(persona, focal_points, n_count=30): 
   """
   Given the current persona and focal points (focal points are events or 
@@ -216,56 +168,51 @@ def new_retrieve(persona, focal_points, n_count=30):
     focal_points = ["How are you?", "Jane is swimming in the pond"]
   """
   # <retrieved> is the main dictionary that we are returning
-  retrieved = dict() 
-  for focal_pt in focal_points: 
+  # NOTE: Embedding-based relevance scoring has been removed.
+  # The SubconsciousRetriever (Sonnet-powered) will handle semantic retrieval.
+  # This function now uses only recency and importance for basic retrieval.
+  retrieved = dict()
+  for focal_pt in focal_points:
     # Getting all nodes from the agent's memory (both thoughts and events) and
     # sorting them by the datetime of creation.
-    # You could also imagine getting the raw conversation, but for now. 
+    # You could also imagine getting the raw conversation, but for now.
     nodes = [[i.last_accessed, i]
               for i in persona.a_mem.seq_event + persona.a_mem.seq_thought
-              if "idle" not in i.embedding_key]
+              if "idle" not in i.description]
     nodes = sorted(nodes, key=lambda x: x[0])
     nodes = [i for created, i in nodes]
 
+    if not nodes:
+      retrieved[focal_pt] = []
+      continue
+
     # Calculating the component dictionaries and normalizing them.
+    # NOTE: Relevance scoring via embeddings has been removed.
+    # SubconsciousRetriever handles semantic relevance instead.
     recency_out = extract_recency(persona, nodes)
     recency_out = normalize_dict_floats(recency_out, 0, 1)
     importance_out = extract_importance(persona, nodes)
-    importance_out = normalize_dict_floats(importance_out, 0, 1)  
-    relevance_out = extract_relevance(persona, nodes, focal_pt)
-    relevance_out = normalize_dict_floats(relevance_out, 0, 1)
+    importance_out = normalize_dict_floats(importance_out, 0, 1)
 
-    # Computing the final scores that combines the component values. 
-    # Note to self: test out different weights. [1, 1, 1] tends to work
-    # decently, but in the future, these weights should likely be learned, 
-    # perhaps through an RL-like process.
-    # gw = [1, 1, 1]
-    # gw = [1, 2, 1]
-    gw = [0.5, 3, 2]
+    # Computing the final scores using recency and importance only.
+    # Relevance is now handled by SubconsciousRetriever (Sonnet-powered).
+    gw = [1, 2]  # weights for [recency, importance]
     master_out = dict()
-    for key in recency_out.keys(): 
-      master_out[key] = (persona.scratch.recency_w*recency_out[key]*gw[0] 
-                     + persona.scratch.relevance_w*relevance_out[key]*gw[1] 
-                     + persona.scratch.importance_w*importance_out[key]*gw[2])
-
-    master_out = top_highest_x_values(master_out, len(master_out.keys()))
-    for key, val in master_out.items(): 
-      print (persona.a_mem.id_to_node[key].embedding_key, val)
-      print (persona.scratch.recency_w*recency_out[key]*1, 
-             persona.scratch.relevance_w*relevance_out[key]*1, 
-             persona.scratch.importance_w*importance_out[key]*1)
+    for key in recency_out.keys():
+      master_out[key] = (persona.scratch.recency_w*recency_out[key]*gw[0]
+                     + persona.scratch.importance_w*importance_out[key]*gw[1])
 
     # Extracting the highest x values.
-    # <master_out> has the key of node.id and value of float. Once we get the 
+    # <master_out> has the key of node.id and value of float. Once we get the
     # highest x values, we want to translate the node.id into nodes and return
     # the list of nodes.
     master_out = top_highest_x_values(master_out, n_count)
-    master_nodes = [persona.a_mem.id_to_node[key] 
+    master_nodes = [persona.a_mem.id_to_node[key]
                     for key in list(master_out.keys())]
 
-    for n in master_nodes: 
+    for n in master_nodes:
       n.last_accessed = persona.scratch.curr_time
-      
+
     retrieved[focal_pt] = master_nodes
 
   return retrieved

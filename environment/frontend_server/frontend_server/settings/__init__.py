@@ -1,33 +1,4 @@
-###FOR PUSHING STATIC TO AWS 
-
-
-
-# from .base import *
-# from .production import *
-
-# try:
-#   from .local import *
-# except:
-  # pass
-
-
-
-
-
-
-###FOR GENERAL USES
-
-
-
-
+# Claudeville Django Settings
+# Just use base.py - we don't need local/production overrides
 
 from .base import *
-
-try: 
-  from .local import *
-  live = False
-except:
-  live = True
-
-if live:
-  from .production import *

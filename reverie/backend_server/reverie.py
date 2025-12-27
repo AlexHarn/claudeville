@@ -1,22 +1,9 @@
 """
 Author: Joon Sung Park (joonspk@stanford.edu)
+Modified for Claudeville
 
 File: reverie.py
-Description: This is the main program for running generative agent simulations
-that defines the ReverieServer class. This class maintains and records all  
-states related to the simulation. The primary mode of interaction for those  
-running the simulation should be through the open_server function, which  
-enables the simulator to input command-line prompts for running and saving  
-the simulation, among other tasks.
-
-Release note (June 14, 2023) -- Reverie implements the core simulation 
-mechanism described in my paper entitled "Generative Agents: Interactive 
-Simulacra of Human Behavior." If you are reading through these lines after 
-having read the paper, you might notice that I use older terms to describe 
-generative agents and their cognitive modules here. Most notably, I use the 
-term "personas" to refer to generative agents, "associative memory" to refer 
-to the memory stream, and "reverie" to refer to the overarching simulation 
-framework.
+Description: Main program for running generative agent simulations.
 """
 import json
 import numpy
@@ -34,28 +21,34 @@ from global_methods import *
 from utils import *
 from maze import *
 from persona.persona import *
+import cli_interface as cli
 
 ##############################################################################
 #                                  REVERIE                                   #
 ##############################################################################
 
-class ReverieServer: 
-  def __init__(self, 
+class ReverieServer:
+  def __init__(self,
                fork_sim_code,
                sim_code):
     # FORKING FROM A PRIOR SIMULATION:
-    # <fork_sim_code> indicates the simulation we are forking from. 
-    # Interestingly, all simulations must be forked from some initial 
-    # simulation, where the first simulation is "hand-crafted".
+    # <fork_sim_code> indicates the simulation we are forking from.
+    # Base templates are in storage/base/, simulation runs go to storage/runs/
     self.fork_sim_code = fork_sim_code
-    fork_folder = f"{fs_storage}/{self.fork_sim_code}"
 
-    # <sim_code> indicates our current simulation. The first step here is to 
-    # copy everything that's in <fork_sim_code>, but edit its 
-    # reverie/meta/json's fork variable. 
+    # Check if fork is a base template or a previous run
+    if os.path.exists(f"{fs_storage_base}/{self.fork_sim_code}"):
+      fork_folder = f"{fs_storage_base}/{self.fork_sim_code}"
+    else:
+      fork_folder = f"{fs_storage_runs}/{self.fork_sim_code}"
+
+    # <sim_code> indicates our current simulation. Runs always go to storage/runs/
     self.sim_code = sim_code
-    sim_folder = f"{fs_storage}/{self.sim_code}"
+    sim_folder = f"{fs_storage_runs}/{self.sim_code}"
     copyanything(fork_folder, sim_folder)
+
+    # Create movement folder for this run (not in base template)
+    os.makedirs(f"{sim_folder}/movement", exist_ok=True)
 
     with open(f"{sim_folder}/reverie/meta.json") as json_file:  
       reverie_meta = json.load(json_file)
@@ -401,10 +394,14 @@ class ReverieServer:
           with open(curr_move_file, "w") as outfile: 
             outfile.write(json.dumps(movements, indent=2))
 
-          # After this cycle, the world takes one step forward, and the 
-          # current time moves by <sec_per_step> amount. 
+          # After this cycle, the world takes one step forward, and the
+          # current time moves by <sec_per_step> amount.
           self.step += 1
           self.curr_time += datetime.timedelta(seconds=self.sec_per_step)
+
+          # Signal the frontend of current step (for browser refresh recovery)
+          with open(f"{fs_temp_storage}/curr_step.json", "w") as outfile:
+            outfile.write(json.dumps({"step": self.step}, indent=2))
 
           int_counter -= 1
           
@@ -412,201 +409,233 @@ class ReverieServer:
       time.sleep(self.server_sleep)
 
 
-  def open_server(self): 
+  def open_server(self):
     """
-    Open up an interactive terminal prompt that lets you run the simulation 
-    step by step and probe agent state. 
-
-    INPUT 
-      None
-    OUTPUT
-      None
+    Open up an interactive terminal prompt that lets you run the simulation
+    step by step and probe agent state.
     """
-    print ("Note: The agents in this simulation package are computational")
-    print ("constructs powered by generative agents architecture and LLM. We")
-    print ("clarify that these agents lack human-like agency, consciousness,")
-    print ("and independent decision-making.\n---")
+    # Show simulation info
+    cli.print_simulation_started(self.sim_code)
+    cli.print_sim_info(
+      self.sim_code,
+      self.fork_sim_code,
+      self.curr_time,
+      self.step,
+      list(self.personas.keys())
+    )
 
-    # <sim_folder> points to the current simulation folder.
-    sim_folder = f"{fs_storage}/{self.sim_code}"
+    sim_folder = f"{fs_storage_runs}/{self.sim_code}"
 
-    while True: 
-      sim_command = input("Enter option: ")
-      sim_command = sim_command.strip()
-      ret_str = ""
+    while True:
+      sim_command = cli.get_prompt()
+      if not sim_command:
+        continue
 
-      try: 
-        if sim_command.lower() in ["f", "fin", "finish", "save and finish"]: 
-          # Finishes the simulation environment and saves the progress. 
-          # Example: fin
+      try:
+        cmd = sim_command.lower().strip()
+        parts = sim_command.split()
+
+        # === CONTROL COMMANDS ===
+        if cmd in ["f", "fin", "finish", "save", "exit"]:
           self.save()
+          if cmd != "save":
+            cli.print_success("Simulation saved. Goodbye!")
+            break
+          else:
+            cli.print_success("Simulation saved.")
+
+        elif cmd == "quit":
+          cli.print_warning("Exiting without saving...")
+          shutil.rmtree(sim_folder)
           break
 
-        elif sim_command.lower() == "start path tester mode": 
-          # Starts the path tester and removes the currently forked sim files.
-          # Note that once you start this mode, you need to exit out of the
-          # session and restart in case you want to run something else. 
-          shutil.rmtree(sim_folder) 
+        elif cmd.startswith("run"):
+          if len(parts) < 2:
+            cli.print_error("Usage: run <number_of_steps>")
+            continue
+          try:
+            int_count = int(parts[-1])
+            start_time = time.time()
+            self.start_server(int_count)
+            elapsed = time.time() - start_time
+            cli.print_run_complete(int_count, elapsed)
+          except ValueError:
+            cli.print_error(f"Invalid step count: {parts[-1]}")
+
+        # === STATUS COMMANDS ===
+        elif cmd in ["help", "?"]:
+          cli.print_help()
+
+        elif cmd == "status":
+          cli.print_sim_info(
+            self.sim_code,
+            self.fork_sim_code,
+            self.curr_time,
+            self.step,
+            list(self.personas.keys())
+          )
+
+        elif cmd == "time":
+          cli.print_info(f"Simulation time: {self.curr_time.strftime('%B %d, %Y, %H:%M:%S')}")
+          cli.print_info(f"Step: {self.step}")
+
+        elif cmd == "personas":
+          for name in self.personas.keys():
+            persona = self.personas[name]
+            action = persona.scratch.act_description or "idle"
+            cli.print_persona_action(name, action)
+
+        # === PERSONA COMMANDS ===
+        elif cmd.startswith("schedule "):
+          name = " ".join(parts[1:])
+          if name in self.personas:
+            print(self.personas[name].scratch.get_str_daily_schedule_summary())
+          else:
+            cli.print_error(f"Persona '{name}' not found")
+
+        elif cmd.startswith("location "):
+          name = " ".join(parts[1:])
+          if name in self.personas:
+            tile = self.personas[name].scratch.curr_tile
+            addr = self.personas[name].scratch.act_address
+            cli.print_info(f"{name} is at tile {tile}")
+            cli.print_info(f"Location: {addr}")
+          else:
+            cli.print_error(f"Persona '{name}' not found")
+
+        elif cmd.startswith("memory "):
+          name = " ".join(parts[1:])
+          if name in self.personas:
+            p = self.personas[name]
+            cli.print_memory_summary(
+              name,
+              len(p.a_mem.seq_event) if hasattr(p.a_mem, 'seq_event') else 0,
+              len(p.a_mem.seq_thought) if hasattr(p.a_mem, 'seq_thought') else 0,
+              len(p.a_mem.seq_chat) if hasattr(p.a_mem, 'seq_chat') else 0
+            )
+          else:
+            cli.print_error(f"Persona '{name}' not found")
+
+        elif cmd.startswith("chat "):
+          name = " ".join(parts[1:])
+          if name in self.personas:
+            self.personas[name].open_convo_session("analysis")
+          else:
+            cli.print_error(f"Persona '{name}' not found")
+
+        # === LEGACY COMMANDS (for backwards compatibility) ===
+        elif "print persona schedule" in cmd:
+          name = " ".join(parts[-2:])
+          if name in self.personas:
+            print(self.personas[name].scratch.get_str_daily_schedule_summary())
+
+        elif "print all persona schedule" in cmd:
+          for persona_name, persona in self.personas.items():
+            print(f"\n{persona_name}")
+            print(persona.scratch.get_str_daily_schedule_summary())
+            print("---")
+
+        elif "print current time" in cmd:
+          print(f'{self.curr_time.strftime("%B %d, %Y, %H:%M:%S")}')
+          print(f'steps: {self.step}')
+
+        elif "call -- analysis" in cmd:
+          persona_name = sim_command[len("call -- analysis"):].strip()
+          if persona_name in self.personas:
+            self.personas[persona_name].open_convo_session("analysis")
+
+        elif cmd == "start path tester mode":
+          shutil.rmtree(sim_folder)
           self.start_path_tester_server()
 
-        elif sim_command.lower() == "exit": 
-          # Finishes the simulation environment but does not save the progress
-          # and erases all saved data from current simulation. 
-          # Example: exit 
-          shutil.rmtree(sim_folder) 
-          break 
+        else:
+          cli.print_warning(f"Unknown command: {sim_command}")
+          cli.print_info("Type 'help' for available commands")
 
-        elif sim_command.lower() == "save": 
-          # Saves the current simulation progress. 
-          # Example: save
-          self.save()
+      except KeyboardInterrupt:
+        print()
+        continue
+      except Exception as e:
+        cli.print_error(str(e))
+        if debug:
+          traceback.print_exc()
 
-        elif sim_command[:3].lower() == "run": 
-          # Runs the number of steps specified in the prompt.
-          # Example: run 1000
-          int_count = int(sim_command.split()[-1])
-          rs.start_server(int_count)
 
-        elif ("print persona schedule" 
-              in sim_command[:22].lower()): 
-          # Print the decomposed schedule of the persona specified in the 
-          # prompt.
-          # Example: print persona schedule Isabella Rodriguez
-          ret_str += (self.personas[" ".join(sim_command.split()[-2:])]
-                      .scratch.get_str_daily_schedule_summary())
+def load_local_config():
+  """Load local config from project root (two levels up from this file)."""
+  config_path = os.path.join(os.path.dirname(__file__), "..", "..", "local_config.json")
+  config_path = os.path.normpath(config_path)
+  try:
+    with open(config_path, "r") as f:
+      return json.load(f), config_path
+  except FileNotFoundError:
+    # Return default config if file doesn't exist
+    return {"default_fork": "base_the_ville_isabella_maria_klaus", "last_simulation": None}, config_path
 
-        elif ("print all persona schedule" 
-              in sim_command[:26].lower()): 
-          # Print the decomposed schedule of all personas in the world. 
-          # Example: print all persona schedule
-          for persona_name, persona in self.personas.items(): 
-            ret_str += f"{persona_name}\n"
-            ret_str += f"{persona.scratch.get_str_daily_schedule_summary()}\n"
-            ret_str += f"---\n"
 
-        elif ("print hourly org persona schedule" 
-              in sim_command.lower()): 
-          # Print the hourly schedule of the persona specified in the prompt.
-          # This one shows the original, non-decomposed version of the 
-          # schedule.
-          # Ex: print persona schedule Isabella Rodriguez
-          ret_str += (self.personas[" ".join(sim_command.split()[-2:])]
-                      .scratch.get_str_daily_schedule_hourly_org_summary())
+def save_local_config(config, config_path):
+  """Save local config to project root."""
+  with open(config_path, "w") as f:
+    json.dump(config, f, indent=2)
 
-        elif ("print persona current tile" 
-              in sim_command[:26].lower()): 
-          # Print the x y tile coordinate of the persona specified in the 
-          # prompt. 
-          # Ex: print persona current tile Isabella Rodriguez
-          ret_str += str(self.personas[" ".join(sim_command.split()[-2:])]
-                      .scratch.curr_tile)
 
-        elif ("print persona chatting with buffer" 
-              in sim_command.lower()): 
-          # Print the chatting with buffer of the persona specified in the 
-          # prompt.
-          # Ex: print persona chatting with buffer Isabella Rodriguez
-          curr_persona = self.personas[" ".join(sim_command.split()[-2:])]
-          for p_n, count in curr_persona.scratch.chatting_with_buffer.items(): 
-            ret_str += f"{p_n}: {count}"
-
-        elif ("print persona associative memory (event)" 
-              in sim_command.lower()):
-          # Print the associative memory (event) of the persona specified in
-          # the prompt
-          # Ex: print persona associative memory (event) Isabella Rodriguez
-          ret_str += f'{self.personas[" ".join(sim_command.split()[-2:])]}\n'
-          ret_str += (self.personas[" ".join(sim_command.split()[-2:])]
-                                       .a_mem.get_str_seq_events())
-
-        elif ("print persona associative memory (thought)" 
-              in sim_command.lower()): 
-          # Print the associative memory (thought) of the persona specified in
-          # the prompt
-          # Ex: print persona associative memory (thought) Isabella Rodriguez
-          ret_str += f'{self.personas[" ".join(sim_command.split()[-2:])]}\n'
-          ret_str += (self.personas[" ".join(sim_command.split()[-2:])]
-                                       .a_mem.get_str_seq_thoughts())
-
-        elif ("print persona associative memory (chat)" 
-              in sim_command.lower()): 
-          # Print the associative memory (chat) of the persona specified in
-          # the prompt
-          # Ex: print persona associative memory (chat) Isabella Rodriguez
-          ret_str += f'{self.personas[" ".join(sim_command.split()[-2:])]}\n'
-          ret_str += (self.personas[" ".join(sim_command.split()[-2:])]
-                                       .a_mem.get_str_seq_chats())
-
-        elif ("print persona spatial memory" 
-              in sim_command.lower()): 
-          # Print the spatial memory of the persona specified in the prompt
-          # Ex: print persona spatial memory Isabella Rodriguez
-          self.personas[" ".join(sim_command.split()[-2:])].s_mem.print_tree()
-
-        elif ("print current time" 
-              in sim_command[:18].lower()): 
-          # Print the current time of the world. 
-          # Ex: print current time
-          ret_str += f'{self.curr_time.strftime("%B %d, %Y, %H:%M:%S")}\n'
-          ret_str += f'steps: {self.step}'
-
-        elif ("print tile event" 
-              in sim_command[:16].lower()): 
-          # Print the tile events in the tile specified in the prompt 
-          # Ex: print tile event 50, 30
-          cooordinate = [int(i.strip()) for i in sim_command[16:].split(",")]
-          for i in self.maze.access_tile(cooordinate)["events"]: 
-            ret_str += f"{i}\n"
-
-        elif ("print tile details" 
-              in sim_command.lower()): 
-          # Print the tile details of the tile specified in the prompt 
-          # Ex: print tile event 50, 30
-          cooordinate = [int(i.strip()) for i in sim_command[18:].split(",")]
-          for key, val in self.maze.access_tile(cooordinate).items(): 
-            ret_str += f"{key}: {val}\n"
-
-        elif ("call -- analysis" 
-              in sim_command.lower()): 
-          # Starts a stateless chat session with the agent. It does not save 
-          # anything to the agent's memory. 
-          # Ex: call -- analysis Isabella Rodriguez
-          persona_name = sim_command[len("call -- analysis"):].strip() 
-          self.personas[persona_name].open_convo_session("analysis")
-
-        elif ("call -- load history" 
-              in sim_command.lower()): 
-          curr_file = maze_assets_loc + "/" + sim_command[len("call -- load history"):].strip() 
-          # call -- load history the_ville/agent_history_init_n3.csv
-
-          rows = read_file_to_list(curr_file, header=True, strip_trail=True)[1]
-          clean_whispers = []
-          for row in rows: 
-            agent_name = row[0].strip() 
-            whispers = row[1].split(";")
-            whispers = [whisper.strip() for whisper in whispers]
-            for whisper in whispers: 
-              clean_whispers += [[agent_name, whisper]]
-
-          load_history_via_whisper(self.personas, clean_whispers)
-
-        print (ret_str)
-
-      except:
-        traceback.print_exc()
-        print ("Error.")
-        pass
+def generate_simulation_name(fork_name):
+  """Generate a new simulation name based on fork name + timestamp."""
+  timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+  return f"{fork_name}_{timestamp}"
 
 
 if __name__ == '__main__':
-  # rs = ReverieServer("base_the_ville_isabella_maria_klaus", 
-  #                    "July1_the_ville_isabella_maria_klaus-step-3-1")
-  # rs = ReverieServer("July1_the_ville_isabella_maria_klaus-step-3-20", 
-  #                    "July1_the_ville_isabella_maria_klaus-step-3-21")
-  # rs.open_server()
+  import sys
 
-  origin = input("Enter the name of the forked simulation: ").strip()
-  target = input("Enter the name of the new simulation: ").strip()
+  # Load local config
+  config, config_path = load_local_config()
+  default_fork = config.get("default_fork", "the_ville_isabella_maria_klaus")
+  last_sim = config.get("last_simulation")
+
+  # Show startup menu
+  cli.print_startup_menu(default_fork, last_sim)
+
+  choice = input(cli.c("  > ", cli.Colors.BRIGHT_BLACK)).strip().lower()
+
+  if choice in ['c', 'continue']:
+    if not last_sim:
+      cli.print_error("No previous simulation to continue.")
+      sys.exit(1)
+    target = last_sim
+    target_folder = f"{fs_storage_runs}/{target}"
+    if not os.path.exists(target_folder):
+      cli.print_error(f"Simulation '{target}' not found.")
+      sys.exit(1)
+    # Load the existing simulation's meta to get its fork
+    meta_file = f"{target_folder}/reverie/meta.json"
+    with open(meta_file) as json_file:
+      meta = json.load(json_file)
+    origin = meta.get("fork_sim_code", default_fork)
+    cli.print_info(f"Continuing: {target}")
+
+  elif choice == 'custom':
+    # Prompt for fork simulation with default
+    print(f"\n  Fork from [{cli.c(default_fork, cli.Colors.CYAN)}]: ", end="")
+    origin = input().strip()
+    if not origin:
+      origin = default_fork
+
+    # Prompt for target simulation with auto-generated default
+    auto_target = generate_simulation_name(origin)
+    print(f"  New name [{cli.c(auto_target, cli.Colors.GREEN)}]: ", end="")
+    target = input().strip()
+    if not target:
+      target = auto_target
+
+  else:
+    # Default: start new simulation with auto-generated name
+    origin = default_fork
+    target = generate_simulation_name(origin)
+
+  # Save the simulation name to local config
+  config["last_simulation"] = target
+  save_local_config(config, config_path)
 
   rs = ReverieServer(origin, target)
   rs.open_server()

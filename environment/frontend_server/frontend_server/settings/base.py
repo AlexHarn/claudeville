@@ -39,7 +39,6 @@ INSTALLED_APPS = [
     'django.contrib.staticfiles',
     'translator',
     'corsheaders',
-    'storages',
 ]
 
 MIDDLEWARE = [
@@ -75,12 +74,12 @@ WSGI_APPLICATION = 'frontend_server.wsgi.application'
 
 
 # Database
-# https://docs.djangoproject.com/en/2.2/ref/settings/#databases
-
+# Using in-memory SQLite - Django requires a database but we don't use it
+# for simulation data (all stored in JSON files)
 DATABASES = {
     'default': {
         'ENGINE': 'django.db.backends.sqlite3',
-        'NAME': os.path.join(BASE_DIR, 'db.sqlite3'),
+        'NAME': ':memory:',
     }
 }
 

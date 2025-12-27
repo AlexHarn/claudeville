@@ -1,0 +1,61 @@
+name: claudeville
+channels:
+  - conda-forge
+  - defaults
+
+dependencies:
+  # Core Python
+  - python>=3.9,<3.12
+
+  # Django and web framework
+  # Note: django>=4.2 is installed via pip (dj-database-url dependency)
+  # Django 4.2 is LTS and works with our updated code
+  - django-cors-headers>=4.0.0
+  - gunicorn>=20.1.0
+
+  # Data science essentials
+  - numpy>=1.25.0
+  - pandas>=2.0.0
+  - scipy>=1.11.0
+  - scikit-learn>=1.3.0
+  - matplotlib>=3.7.0
+  - seaborn>=0.12.0
+
+  # NLP (no embeddings - Claude handles semantic understanding)
+  - nltk>=3.6.5
+
+  # Async support for parallel Claude CLI calls
+  - aiohttp>=3.8.0
+
+  # Browser automation
+  - selenium>=4.8.0
+
+  # Utilities
+  - requests>=2.26.0
+  - tqdm>=4.62.0
+  - pillow>=8.4.0
+  - regex>=2021.11.10
+  - python-dateutil>=2.8.0
+
+  # Database
+  - psycopg2>=2.9.0
+
+  # Pip dependencies (for packages not in conda)
+  - pip
+
+  - pip:
+    # Django (4.2 LTS, compatible with updated code)
+    - django>=4.2,<5.0
+    - dj-database-url>=0.5.0
+    # Statistics
+    - statsmodels>=0.13.0
+    - scikit-posthocs>=0.7.0
+
+    # Other utilities
+    - trueskill>=0.4.5
+
+# Note: The following have been intentionally REMOVED:
+# - openai (replaced by Claude CLI)
+# - sentence-transformers (embeddings replaced by Sonnet retrieval)
+# - gensim (word embeddings not needed)
+# - torch/transformers (no neural embedding models needed)

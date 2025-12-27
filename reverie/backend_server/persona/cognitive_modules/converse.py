@@ -16,7 +16,7 @@ from persona.memory_structures.spatial_memory import *
 from persona.memory_structures.associative_memory import *
 from persona.memory_structures.scratch import *
 from persona.cognitive_modules.retrieve import *
-from persona.prompt_template.run_gpt_prompt import *
+from persona.prompt_template.run_prompt import *
 
 def generate_agent_chat_summarize_ideas(init_persona, 
                                         target_persona, 
@@ -216,16 +216,13 @@ def generate_action_event_triple(act_desp, persona):
     persona: The Persona class instance
   OUTPUT: 
     a string of emoji that translates action description.
-  EXAMPLE OUTPUT: 
+  EXAMPLE OUTPUT:
     "🧈🍞"
   """
-  if debug: print ("GNS FUNCTION: <generate_action_event_triple>")
   return run_gpt_prompt_event_triple(act_desp, persona)[0]
 
 
-def generate_poig_score(persona, event_type, description): 
-  if debug: print ("GNS FUNCTION: <generate_poig_score>")
-
+def generate_poig_score(persona, event_type, description):
   if "is idle" in description: 
     return 1
 
@@ -237,7 +234,7 @@ def generate_poig_score(persona, event_type, description):
 
 
 def load_history_via_whisper(personas, whispers):
-  for count, row in enumerate(whispers): 
+  for count, row in enumerate(whispers):
     persona = personas[row[0]]
     whisper = row[1]
 
@@ -248,10 +245,10 @@ def load_history_via_whisper(personas, whispers):
     s, p, o = generate_action_event_triple(thought, persona)
     keywords = set([s, p, o])
     thought_poignancy = generate_poig_score(persona, "event", whisper)
-    thought_embedding_pair = (thought, get_embedding(thought))
-    persona.a_mem.add_thought(created, expiration, s, p, o, 
-                              thought, keywords, thought_poignancy, 
-                              thought_embedding_pair, None)
+    # NOTE: Embedding generation removed - using thought as embedding_key identifier
+    persona.a_mem.add_thought(created, expiration, s, p, o,
+                              thought, keywords, thought_poignancy,
+                              thought, None)
 
 
 def open_convo_session(persona, convo_mode): 
@@ -276,7 +273,7 @@ def open_convo_session(persona, convo_mode):
         curr_convo += [[persona.scratch.name, next_line]]
 
 
-  elif convo_mode == "whisper": 
+  elif convo_mode == "whisper":
     whisper = input("Enter Input: ")
     thought = generate_inner_thought(persona, whisper)
 
@@ -285,10 +282,10 @@ def open_convo_session(persona, convo_mode):
     s, p, o = generate_action_event_triple(thought, persona)
     keywords = set([s, p, o])
     thought_poignancy = generate_poig_score(persona, "event", whisper)
-    thought_embedding_pair = (thought, get_embedding(thought))
-    persona.a_mem.add_thought(created, expiration, s, p, o, 
-                              thought, keywords, thought_poignancy, 
-                              thought_embedding_pair, None)
+    # NOTE: Embedding generation removed - using thought as embedding_key identifier
+    persona.a_mem.add_thought(created, expiration, s, p, o,
+                              thought, keywords, thought_poignancy,
+                              thought, None)
 
 
 

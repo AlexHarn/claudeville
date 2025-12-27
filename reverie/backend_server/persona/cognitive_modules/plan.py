@@ -12,7 +12,7 @@ import time
 sys.path.append('../../')
 
 from global_methods import *
-from persona.prompt_template.run_gpt_prompt import *
+from persona.prompt_template.run_prompt import *
 from persona.cognitive_modules.retrieve import *
 from persona.cognitive_modules.converse import *
 
@@ -31,10 +31,9 @@ def generate_wake_up_hour(persona):
     persona: The Persona class instance 
   OUTPUT: 
     an integer signifying the persona's wake up hour
-  EXAMPLE OUTPUT: 
+  EXAMPLE OUTPUT:
     8
   """
-  if debug: print ("GNS FUNCTION: <generate_wake_up_hour>")
   return int(run_gpt_prompt_wake_up_hour(persona)[0])
 
 
@@ -64,7 +63,6 @@ def generate_first_daily_plan(persona, wake_up_hour):
      'work on painting project from 4:00 pm to 6:00 pm', 
      'have dinner at 6:00 pm', 'watch TV from 7:00 pm to 8:00 pm']
   """
-  if debug: print ("GNS FUNCTION: <generate_first_daily_plan>")
   return run_gpt_prompt_daily_plan(persona, wake_up_hour)[0]
 
 
@@ -83,12 +81,10 @@ def generate_hourly_schedule(persona, wake_up_hour):
     persona: Integer form of the wake up hour for the persona.  
   OUTPUT: 
     a list of activities and their duration in minutes: 
-  EXAMPLE OUTPUT: 
-    [['sleeping', 360], ['waking up and starting her morning routine', 60], 
+  EXAMPLE OUTPUT:
+    [['sleeping', 360], ['waking up and starting her morning routine', 60],
      ['eating breakfast', 60],..
   """
-  if debug: print ("GNS FUNCTION: <generate_hourly_schedule>")
-
   hour_str = ["00:00 AM", "01:00 AM", "02:00 AM", "03:00 AM", "04:00 AM", 
               "05:00 AM", "06:00 AM", "07:00 AM", "08:00 AM", "09:00 AM", 
               "10:00 AM", "11:00 AM", "12:00 PM", "01:00 PM", "02:00 PM", 
@@ -157,10 +153,9 @@ def generate_task_decomp(persona, task, duration):
     [['going to the bathroom', 5], ['getting dressed', 5], 
      ['eating breakfast', 15], ['checking her email', 5], 
      ['getting her supplies ready for the day', 15], 
-     ['starting to work on her painting', 15]] 
+     ['starting to work on her painting', 15]]
 
   """
-  if debug: print ("GNS FUNCTION: <generate_task_decomp>")
   return run_gpt_prompt_task_decomp(persona, task, duration)[0]
 
 
@@ -175,10 +170,9 @@ def generate_action_sector(act_desp, persona, maze):
     persona: The Persona class instance 
   OUTPUT: 
     action_arena (e.g., "bedroom 2")
-  EXAMPLE OUTPUT: 
+  EXAMPLE OUTPUT:
     "bedroom 2"
   """
-  if debug: print ("GNS FUNCTION: <generate_action_sector>")
   return run_gpt_prompt_action_sector(act_desp, persona, maze)[0]
 
 
@@ -191,12 +185,11 @@ def generate_action_arena(act_desp, persona, maze, act_world, act_sector):
   INPUT: 
     act_desp: description of the new action (e.g., "sleeping")
     persona: The Persona class instance 
-  OUTPUT: 
+  OUTPUT:
     action_arena (e.g., "bedroom 2")
-  EXAMPLE OUTPUT: 
+  EXAMPLE OUTPUT:
     "bedroom 2"
   """
-  if debug: print ("GNS FUNCTION: <generate_action_arena>")
   return run_gpt_prompt_action_arena(act_desp, persona, maze, act_world, act_sector)[0]
 
 
@@ -214,10 +207,9 @@ def generate_action_game_object(act_desp, act_address, persona, maze):
     persona: The Persona class instance 
   OUTPUT: 
     act_game_object: 
-  EXAMPLE OUTPUT: 
+  EXAMPLE OUTPUT:
     "bed"
   """
-  if debug: print ("GNS FUNCTION: <generate_action_game_object>")
   if not persona.s_mem.get_str_accessible_arena_game_objects(act_address): 
     return "<random>"
   return run_gpt_prompt_action_game_object(act_desp, persona, maze, act_address)[0]
@@ -235,10 +227,9 @@ def generate_action_pronunciatio(act_desp, persona):
     persona: The Persona class instance
   OUTPUT: 
     a string of emoji that translates action description.
-  EXAMPLE OUTPUT: 
+  EXAMPLE OUTPUT:
     "🧈🍞"
   """
-  if debug: print ("GNS FUNCTION: <generate_action_pronunciatio>")
   try: 
     x = run_gpt_prompt_pronunciatio(act_desp, persona)[0]
   except: 
@@ -257,20 +248,17 @@ def generate_action_event_triple(act_desp, persona):
     persona: The Persona class instance
   OUTPUT: 
     a string of emoji that translates action description.
-  EXAMPLE OUTPUT: 
+  EXAMPLE OUTPUT:
     "🧈🍞"
   """
-  if debug: print ("GNS FUNCTION: <generate_action_event_triple>")
   return run_gpt_prompt_event_triple(act_desp, persona)[0]
 
 
-def generate_act_obj_desc(act_game_object, act_desp, persona): 
-  if debug: print ("GNS FUNCTION: <generate_act_obj_desc>")
+def generate_act_obj_desc(act_game_object, act_desp, persona):
   return run_gpt_prompt_act_obj_desc(act_game_object, act_desp, persona)[0]
 
 
-def generate_act_obj_event_triple(act_game_object, act_obj_desc, persona): 
-  if debug: print ("GNS FUNCTION: <generate_act_obj_event_triple>")
+def generate_act_obj_event_triple(act_game_object, act_obj_desc, persona):
   return run_gpt_prompt_act_obj_event_triple(act_game_object, act_obj_desc, persona)[0]
 
 
@@ -289,7 +277,6 @@ def generate_convo(maze, init_persona, target_persona):
 
   convo_length = math.ceil(int(len(all_utt)/8) / 30)
 
-  if debug: print ("GNS FUNCTION: <generate_convo>")
   return convo, convo_length
 
 
@@ -298,9 +285,8 @@ def generate_convo_summary(persona, convo):
   return convo_summary
 
 
-def generate_decide_to_talk(init_persona, target_persona, retrieved): 
-  x =run_gpt_prompt_decide_to_talk(init_persona, target_persona, retrieved)[0]
-  if debug: print ("GNS FUNCTION: <generate_decide_to_talk>")
+def generate_decide_to_talk(init_persona, target_persona, retrieved):
+  x = run_gpt_prompt_decide_to_talk(init_persona, target_persona, retrieved)[0]
 
   if x == "yes": 
     return True
@@ -308,8 +294,7 @@ def generate_decide_to_talk(init_persona, target_persona, retrieved):
     return False
 
 
-def generate_decide_to_react(init_persona, target_persona, retrieved): 
-  if debug: print ("GNS FUNCTION: <generate_decide_to_react>")
+def generate_decide_to_react(init_persona, target_persona, retrieved):
   return run_gpt_prompt_decide_to_react(init_persona, target_persona, retrieved)[0]
 
 
@@ -353,7 +338,6 @@ def generate_new_decomp_schedule(persona, inserted_act, inserted_act_dur,  start
   count = 0 # enumerate count
   truncated_fin = False 
 
-  print ("DEBUG::: ", persona.scratch.name)
   for act, dur in p.scratch.f_daily_schedule: 
     if (dur_sum >= start_hour * 60) and (dur_sum < end_hour * 60): 
       main_act_dur += [[act, dur]]
@@ -362,13 +346,9 @@ def generate_new_decomp_schedule(persona, inserted_act, inserted_act_dur,  start
       elif dur_sum > today_min_pass and not truncated_fin: 
         # We need to insert that last act, duration list like this one: 
         # e.g., ['wakes up and completes her morning routine (wakes up...)', 2]
-        truncated_act_dur += [[p.scratch.f_daily_schedule[count][0], 
-                               dur_sum - today_min_pass]] 
-        truncated_act_dur[-1][-1] -= (dur_sum - today_min_pass) ######## DEC 7 DEBUG;.. is the +1 the right thing to do??? 
-        # truncated_act_dur[-1][-1] -= (dur_sum - today_min_pass + 1) ######## DEC 7 DEBUG;.. is the +1 the right thing to do??? 
-        print ("DEBUG::: ", truncated_act_dur)
-
-        # truncated_act_dur[-1][-1] -= (dur_sum - today_min_pass) ######## DEC 7 DEBUG;.. is the +1 the right thing to do??? 
+        truncated_act_dur += [[p.scratch.f_daily_schedule[count][0],
+                               dur_sum - today_min_pass]]
+        truncated_act_dur[-1][-1] -= (dur_sum - today_min_pass)
         truncated_fin = True
     dur_sum += dur
     count += 1
@@ -388,10 +368,9 @@ def generate_new_decomp_schedule(persona, inserted_act, inserted_act_dur,  start
   truncated_act_dur += [[inserted_act, inserted_act_dur]]
   start_time_hour = (datetime.datetime(2022, 10, 31, 0, 0) 
                    + datetime.timedelta(hours=start_hour))
-  end_time_hour = (datetime.datetime(2022, 10, 31, 0, 0) 
+  end_time_hour = (datetime.datetime(2022, 10, 31, 0, 0)
                    + datetime.timedelta(hours=end_hour))
 
-  if debug: print ("GNS FUNCTION: <generate_new_decomp_schedule>")
   return run_gpt_prompt_new_decomp_schedule(persona, 
                                             main_act_dur, 
                                             truncated_act_dur, 
@@ -454,7 +433,6 @@ def revise_identity(persona):
 
   new_daily_req = ChatGPT_single_request(daily_req_prompt)
   new_daily_req = new_daily_req.replace('\n', ' ')
-  print ("WE ARE HERE!!!", new_daily_req)
   persona.scratch.daily_plan_req = new_daily_req
 
 
@@ -507,10 +485,10 @@ def _long_term_planning(persona, new_day):
   s, p, o = (persona.scratch.name, "plan", persona.scratch.curr_time.strftime('%A %B %d'))
   keywords = set(["plan"])
   thought_poignancy = 5
-  thought_embedding_pair = (thought, get_embedding(thought))
-  persona.a_mem.add_thought(created, expiration, s, p, o, 
-                            thought, keywords, thought_poignancy, 
-                            thought_embedding_pair, None)
+  # NOTE: Embeddings removed - just pass thought as the embedding_key identifier
+  persona.a_mem.add_thought(created, expiration, s, p, o,
+                            thought, keywords, thought_poignancy,
+                            thought, None)
 
   # print("Sleeping for 20 seconds...")
   # time.sleep(10)
@@ -593,24 +571,16 @@ def _determine_action(persona, maze):
   # * End of Decompose * 
 
   # Generate an <Action> instance from the action description and duration. By
-  # this point, we assume that all the relevant actions are decomposed and 
-  # ready in f_daily_schedule. 
-  print ("DEBUG LJSDLFSKJF")
-  for i in persona.scratch.f_daily_schedule: print (i)
-  print (curr_index)
-  print (len(persona.scratch.f_daily_schedule))
-  print (persona.scratch.name)
-  print ("------")
+  # this point, we assume that all the relevant actions are decomposed and
+  # ready in f_daily_schedule.
 
   # 1440
   x_emergency = 0
-  for i in persona.scratch.f_daily_schedule: 
+  for i in persona.scratch.f_daily_schedule:
     x_emergency += i[1]
-  # print ("x_emergency", x_emergency)
 
-  if 1440 - x_emergency > 0: 
-    print ("x_emergency__AAA", x_emergency)
-  persona.scratch.f_daily_schedule += [["sleeping", 1440 - x_emergency]]
+  if 1440 - x_emergency > 0:
+    persona.scratch.f_daily_schedule += [["sleeping", 1440 - x_emergency]]
   
 
 
