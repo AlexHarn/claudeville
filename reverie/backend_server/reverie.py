@@ -16,10 +16,11 @@ import threading
 import time
 import traceback
 
-from flask import Flask, jsonify
+from flask import Flask, jsonify, request
 
 import cli_interface as cli
 from maze import Maze
+from persona.prompt_template.claude_structure import _run_async
 from utils import (
     debug,
     fs_storage,
@@ -236,6 +237,65 @@ class ReverieServer:
             self.save()
             return jsonify({"status": "saved", "step": self.step})
 
+        @self.flask_app.route("/simulate", methods=["POST"])
+        def handle_simulate():
+            """
+            Run simulation steps on demand from frontend.
+            Request body: {"steps": N} where N is number of steps to simulate.
+            Returns immediately after queueing the steps.
+            """
+            data = request.get_json() or {}
+            num_steps = min(data.get("steps", 1), 10)  # Cap at 10 steps per request
+
+            # Build environment data from current state
+            environment = {}
+            for persona_name in self.personas:
+                tile = self.personas_tile[persona_name]
+                environment[persona_name] = {"x": tile[0], "y": tile[1]}
+
+            # Run the steps (movements get queued automatically)
+            for i in range(num_steps):
+                # Print step header like CLI does
+                cli.print_step_start(self.step, self.curr_time)
+                self._process_step({"environment": environment})
+                # Update environment for next step
+                for persona_name in self.personas:
+                    tile = self.personas_tile[persona_name]
+                    environment[persona_name] = {"x": tile[0], "y": tile[1]}
+
+            return jsonify(
+                {
+                    "status": "ok",
+                    "steps_run": num_steps,
+                    "current_step": self.step,
+                    "queued_movements": len(self._pending_movements),
+                }
+            )
+
+        @self.flask_app.route("/saves", methods=["GET"])
+        def handle_list_saves():
+            """List available save files."""
+            saves = []
+            runs_dir = fs_storage
+            if os.path.exists(runs_dir):
+                for sim_name in os.listdir(runs_dir):
+                    meta_path = f"{runs_dir}/{sim_name}/reverie/meta.json"
+                    if os.path.exists(meta_path):
+                        try:
+                            with open(meta_path) as f:
+                                meta = json.load(f)
+                            saves.append(
+                                {
+                                    "sim_code": sim_name,
+                                    "step": meta.get("step", 0),
+                                    "curr_time": meta.get("curr_time", ""),
+                                    "personas": meta.get("persona_names", []),
+                                }
+                            )
+                        except (OSError, json.JSONDecodeError, KeyError):
+                            pass
+            return jsonify({"saves": saves})
+
     def _process_step(self, data):
         """
         Process one simulation step. This is the core logic extracted from
@@ -301,13 +361,25 @@ class ReverieServer:
 
         async def run_persona_move(name, persona):
             """Run a single persona's move asynchronously."""
-            next_tile, pronunciatio, description = await persona.move_async(
+            (
+                next_tile,
+                pronunciatio,
+                description,
+                had_llm_call,
+            ) = await persona.move_async(
                 self.maze,
                 self.personas,
                 self.personas_tile[name],
                 self.curr_time,
             )
-            return name, next_tile, pronunciatio, description, persona.scratch.chat
+            return (
+                name,
+                next_tile,
+                pronunciatio,
+                description,
+                persona.scratch.chat,
+                had_llm_call,
+            )
 
         async def run_all_personas():
             """Run all personas in parallel using asyncio.gather."""
@@ -317,28 +389,36 @@ class ReverieServer:
             ]
             return await asyncio.gather(*tasks)
 
-        # Run all persona moves in parallel
-        try:
-            loop = asyncio.get_event_loop()
-        except RuntimeError:
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
+        # Run all persona moves in parallel using the shared event loop
+        # This ensures Flask thread uses the same loop as Claude SDK clients
+        results = _run_async(run_all_personas())
 
-        results = loop.run_until_complete(run_all_personas())
-
-        for name, next_tile, pronunciatio, description, chat in results:
+        # Track if any persona had an LLM call (new action)
+        any_llm_call = False
+        active_personas = []  # Track which personas made LLM decisions
+        for name, next_tile, pronunciatio, description, chat, had_llm_call in results:
             movements["persona"][name] = {
                 "movement": next_tile,
                 "pronunciatio": pronunciatio,
                 "description": description,
                 "chat": chat,
+                "had_action": had_llm_call,  # Mark individual persona's LLM status
             }
             # Update backend position state with new tile
             self.personas_tile[name] = next_tile
+            if had_llm_call:
+                any_llm_call = True
+                active_personas.append(name)
 
         # Add meta information (step is sent BEFORE increment so frontend knows what step this was)
         movements["meta"]["curr_time"] = self.curr_time.strftime("%B %d, %Y, %H:%M:%S")
         movements["meta"]["step"] = self.step  # Current step being processed
+        movements["meta"][
+            "had_new_action"
+        ] = any_llm_call  # True if any persona made new decision
+        movements["meta"][
+            "active_personas"
+        ] = active_personas  # List of personas who made decisions
 
         # Advance simulation state
         self.step += 1

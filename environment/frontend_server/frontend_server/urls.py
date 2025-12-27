@@ -23,6 +23,8 @@ urlpatterns = [
     path("api/movements/", translator_views.api_movements, name="api_movements"),
     path("api/status/", translator_views.api_status, name="api_status"),
     path("api/save/", translator_views.api_save, name="api_save"),
+    path("api/simulate/", translator_views.api_simulate, name="api_simulate"),
+    path("api/saves/", translator_views.api_saves, name="api_saves"),
     # Page views
     re_path(r"^$", translator_views.landing, name="landing"),
     re_path(r"^simulator_home$", translator_views.home, name="home"),

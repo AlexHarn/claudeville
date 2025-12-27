@@ -118,7 +118,8 @@ class Persona:
         - Continuing current action with no new perceptions
 
         Returns:
-            tuple: (next_tile, emoji, description)
+            tuple: (next_tile, emoji, description, had_llm_call)
+            - had_llm_call: True if LLM was called, False if action was continued
         """
         self.scratch.curr_tile = curr_tile
 
@@ -144,7 +145,8 @@ class Persona:
             new_day, perceptions, nearby_personas, maze, personas
         )
         if skip_result:
-            return skip_result
+            # Return with had_llm_call=False
+            return (*skip_result, False)
 
         # =====================================================================
         # LLM DECISION - Need to make a new decision
@@ -172,13 +174,18 @@ class Persona:
         # Update acknowledged nearby after LLM call
         self._acknowledged_nearby = set(nearby_personas)
 
-        return self._process_step_response(step_response, maze, personas)
+        # Return with had_llm_call=True
+        return (*self._process_step_response(step_response, maze, personas), True)
 
     async def move_async(self, maze, personas, curr_tile, curr_time):
         """
         Async version of move() for parallel execution.
 
         Same logic as move() but uses async LLM calls.
+
+        Returns:
+            tuple: (next_tile, emoji, description, had_llm_call)
+            - had_llm_call: True if LLM was called, False if action was continued
         """
         self.scratch.curr_tile = curr_tile
 
@@ -204,7 +211,8 @@ class Persona:
             new_day, perceptions, nearby_personas, maze, personas
         )
         if skip_result:
-            return skip_result
+            # Return with had_llm_call=False
+            return (*skip_result, False)
 
         # =====================================================================
         # LLM DECISION - Need to make a new decision
@@ -232,7 +240,8 @@ class Persona:
         # Update acknowledged nearby after LLM call
         self._acknowledged_nearby = set(nearby_personas)
 
-        return self._process_step_response(step_response, maze, personas)
+        # Return with had_llm_call=True
+        return (*self._process_step_response(step_response, maze, personas), True)
 
     # =========================================================================
     # SKIP LOGIC

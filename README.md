@@ -1,14 +1,10 @@
 # Claudeville: Generative Agents with Claude
 
-Fork of Stanford's [Generative Agents](https://github.com/joonspk-research/generative_agents) ported from OpenAI API to Claude Code CLI for Max subscription users.
-
-<p align="center" width="100%">
-<img src="cover.png" alt="Smallville" style="width: 80%; min-width: 300px; display: block; margin: auto;">
-</p>
+Fork of Stanford's [Generative Agents](https://github.com/joonspk-research/generative_agents) ported from OpenAI API to Claude Agent SDK for Max subscription users.
 
 ## Current Status
 
-**Major architectural refactor complete.** This is no longer a minimal port - it's a fundamentally different approach to running generative agents.
+**Full-screen game interface with frontend-driven simulation.** This is no longer a minimal port - it's a fundamentally different approach to running generative agents with a modern, game-like UI.
 
 ### Key Departures from Original
 
@@ -19,12 +15,34 @@ Fork of Stanford's [Generative Agents](https://github.com/joonspk-research/gener
 | File-based frontend polling | HTTP-based communication |
 | Embedding-based retrieval | Keyword + recency scoring |
 | Stateless API calls | Context window monitoring with compaction |
+| Fixed canvas, page layout | Full-screen game with floating UI panels |
+| Backend-driven simulation | Frontend-driven with smart buffering |
 
-### What Works
+## Features
+
+### Game Interface
+
+- **Full-screen Phaser.js game** that fills the browser window and resizes dynamically
+- **Mouse controls**: Click and drag to pan the map, scroll wheel to zoom (0.3x - 3x)
+- **Floating UI panels** with dark translucent styling:
+  - Top control bar: time display, play/pause/skip, speed slider, zoom indicator
+  - Right persona panel: collapsible list of all personas with live status
+- **Click persona cards** to center the camera on that character
+- **ESC menu**: Save game, view saved simulations
+
+### Simulation Control
+
+- **Frontend-driven simulation**: No need to use CLI commands - the frontend automatically requests simulation steps
+- **Smart buffering**: Keeps 2-3 steps simulated ahead for smooth playback
+- **Play/Pause**: Control animation playback without stopping simulation
+- **Skip to Next Action**: Fast-forward through walking/sleeping until an LLM decision happens
+- **Speed control**: 1x to 10x playback speed
+
+### Backend Architecture
 
 - **Claude Agent SDK Integration**: Persistent connections with ~3x faster subsequent calls (~2.5s vs ~7-10s)
 - **Unified Prompting System**: One LLM call per step returns action, social, and thought decisions
-- **HTTP Backend/Frontend**: Flask server with `/movements`, `/status`, `/save` endpoints
+- **HTTP Backend/Frontend**: Flask server with `/movements`, `/status`, `/save`, `/simulate`, `/saves` endpoints
 - **Smart LLM Skip Logic**: Avoids redundant calls when actions are in progress
 - **Parallel Persona Execution**: All personas run concurrently per simulation step
 - **Memory storage**: Events, thoughts, chats in JSON with keyword-based retrieval
@@ -36,6 +54,8 @@ Fork of Stanford's [Generative Agents](https://github.com/joonspk-research/gener
 - Old prompt template directories (v1, v2, v3_ChatGPT)
 - File-based polling (eliminated ~5000 JSON files per simulation)
 - Multi-step cognitive chain (perceive, plan, execute, reflect as separate LLM calls)
+- Bootstrap CSS framework (replaced with custom minimal CSS)
+- Arrow key camera controls (replaced with mouse drag)
 
 ## Requirements
 
@@ -54,23 +74,38 @@ The script will:
 1. Create conda environment if needed
 2. Start Django frontend on http://localhost:8000
 3. Start Flask backend on http://localhost:5000
-4. Start the CLI simulation controller
+4. Open CLI for simulation management
 
 When prompted, press Enter for defaults or choose:
 - `c` - Continue last simulation
 - `custom` - Specify fork and simulation name
 - Enter - Start new simulation with auto-generated name
 
-Then in the CLI:
-```
-run <step-count>   # Run N simulation steps
-status             # Show simulation info
-personas           # Show all personas and their current actions
-save               # Save simulation state
-exit               # Save and quit
-```
+Open http://localhost:8000/simulator_home in browser - simulation runs automatically!
 
-Open http://localhost:8000 in browser to watch the simulation animate.
+### Controls
+
+| Control | Action |
+|---------|--------|
+| **Mouse drag** | Pan the map |
+| **Scroll wheel** | Zoom in/out |
+| **Play button** | Resume animation |
+| **Pause button** | Pause animation (simulation continues buffering) |
+| **Skip button** | Fast-forward to next LLM decision |
+| **Speed slider** | Adjust playback speed (1x-10x) |
+| **ESC** | Open menu (save game, view saves) |
+| **Click persona card** | Center camera on that character |
+
+### CLI Commands (Optional)
+
+The CLI is still available for manual control:
+```
+run <N>    # Run N simulation steps manually
+status     # Show simulation info
+save       # Save simulation state
+fin        # Save and exit
+quit       # Exit without saving
+```
 
 ## Manual Setup
 
@@ -115,13 +150,23 @@ claudeville/
 │       └── prompt_template/
 │           └── claude_structure.py  # UnifiedPersonaClient + SDK
 └── environment/frontend_server/
+    ├── static_dirs/css/      # Game UI styles
     ├── storage/              # Simulation data
-    └── templates/            # Phaser.js game
+    └── templates/home/       # Phaser.js game + UI
 ```
 
 ## Known Issues
 
 - Avatar/sprite loading shows same character for all personas (frontend JS bug)
+- Persona panel needs improvements for large groups (25+ personas) - scrolling works but needs smart ordering by proximity/activity
+
+## Roadmap
+
+- [ ] Smart persona panel ordering (by proximity to camera, recent actions, conversations)
+- [ ] Persona panel search/filter for large simulations
+- [ ] Minimap showing persona locations
+- [ ] Click-to-follow: lock camera to follow a specific persona
+- [ ] Conversation bubbles on map (speech bubbles above sprites)
 
 ## Acknowledgements
 

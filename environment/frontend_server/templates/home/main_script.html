@@ -10,28 +10,12 @@
 </div>
 
 <script type="text/javascript">
-	/*
-	  Main resources:
-	  https://www.youtube.com/watch?v=cKIG1lKwLeo&t=401s&ab_channel=HongLy
-	  For the ground zero code, see the exported files from here:
-	  https://codepen.io/mikewesthad/pen/BVeoYP?editors=1111
-
-	  Also worth taking a look:
-	  https://www.youtube.com/watch?v=fdXcD9X4NrQ&ab_channel=MorganPage
-	  and
-	  https://www.youtube.com/watch?v=MR2CvWxOEsw&ab_channel=MattWilber
-	 */
-
-
 	// ###########################################################################
 	// PREAMBLE
 	// ###########################################################################
 
-	// <step> -- one full loop around all three phases determined by <phase> is
-	// a step. We use this to link the steps in the backend.
 	let step = parseInt(document.getElementById('step').innerHTML);
 	let sim_code = document.getElementById('sim_code').innerHTML;
-	// let persona_names = document.getElementById('persona_name_list').innerHTML.split(",");
 
 	let spans = document.getElementById('persona_init_pos').getElementsByTagName('span');
 	let persona_names = {};
@@ -40,127 +24,202 @@
 		persona_names[x[0]] = [parseInt(x[1]), parseInt(x[2])]
 	}
 
-
-	// Phaser 3.0 global settings.
-	// Configuration meant to be passed to the main Phaser game instance.
+	// Phaser 3.0 global settings - FULL SCREEN RESPONSIVE
 	const config = {
 	  type: Phaser.AUTO,
-	  width: 1500,
-	  height: 800,
+	  width: window.innerWidth,
+	  height: window.innerHeight,
 	  parent: "game-container",
 	  pixelArt: true,
+	  scale: {
+	    mode: Phaser.Scale.RESIZE,
+	    autoCenter: Phaser.Scale.CENTER_BOTH
+	  },
 	  physics: {
 	    default: "arcade",
 	    arcade: {
-	      gravity: { y: 0 } } },
+	      gravity: { y: 0 }
+	    }
+	  },
 	  scene: {
 	    preload: preload,
 	    create: create,
-	    update: update } };
+	    update: update
+	  }
+	};
 
-	// const config = {
-	//   type: Phaser.AUTO,
-	//   width: 4480,
-	//   height: 3200,
-	//   parent: "game-container",
-	//   pixelArt: true,
-	//   physics: {
-	//     default: "arcade",
-	//     arcade: {
-	//       gravity: { y: 0 } } },
-	//   scene: {
-	//     preload: preload,
-	//     create: create,
-	//     update: update },
-	//   scale: {zoom: 0.5} };
-
-	// Creating the game instance and setting up the main Phaser variables that
-	// will be used in it.
 	const game = new Phaser.Game(config);
-	let cursors;
-	let player;
 	let showDebug = false;
 
-	// Persona related variables. This should have the name of the persona as its
-	// keys, and the instances of the Persona class as the values.
-	var spawn_tile_loc = {};
-	// for (var i = 0; i < persona_names.length; i++) {
-	// 	spawn_tile_loc[persona_names[i]] = [0, 0]
-	// }
+	// Camera control state
+	let isDragging = false;
+	let dragStart = { x: 0, y: 0 };
+	let scrollStart = { x: 0, y: 0 };
+	let zoomLevel = 1.0;
+	const zoomMin = 0.3;
+	const zoomMax = 3.0;
+	const zoomStep = 0.1;
+	let mainCamera = null;
+	let mapBounds = { width: 0, height: 0 };
 
+	// Persona related variables
+	var spawn_tile_loc = {};
 	for (var key in persona_names){
-		spawn_tile_loc[key] = persona_names[key] ;
+		spawn_tile_loc[key] = persona_names[key];
 	}
-	console.log(spawn_tile_loc);
 
 	var personas = {};
 	var pronunciatios = {};
 	let anims_direction;
-	let pre_anims_direction;
 	let pre_anims_direction_dict = {};
 
 	let curr_maze = "the_ville";
-
-	// <tile_width> is the width of one individual tile (tiles are square)
 	let tile_width = 32;
-	// Important: tile_width % movement_speed has to be 0.
-	// <movement_speed> determines how fast we move at each upate cylce.
 	let movement_speed = 32;
 
-	// Variables for movement display
-	let pollInProgress = false;  // Prevents concurrent polls
-	let execute_movement = null;  // Movement data from backend
+	// Movement display variables
+	let pollInProgress = false;
+	let execute_movement = null;
 	let execute_count_max = tile_width/movement_speed;
-	let execute_count = 0;  // Start at 0 (no movement pending)
+	let execute_count = 0;
 	let movement_target = {};
 
 	// ==========================================================================
-	// Movement Polling - frontend displays what backend simulates
+	// Playback Controls
+	// ==========================================================================
+	let isPaused = false;
+	let isSkipping = false;
+	let playbackSpeed = 5;
+	let animationDelay = 200;
+	let lastAnimationTime = 0;
+
+	// ==========================================================================
+	// Simulation Control (Frontend-driven)
+	// ==========================================================================
+	let isSimulating = false;
+	let simulationActive = true;  // Master switch for auto-simulation
+	let queuedMovements = 0;      // Steps queued but not yet animated
+	let displayedStep = step;     // Step currently being displayed
+	let simulatedStep = step;     // Step simulated on backend
+	const TARGET_BUFFER = 3;      // Target number of steps to keep buffered ahead
+	const BATCH_SIZE = 2;         // Steps to request per batch
+
+	async function requestSimulation(numSteps) {
+		if (isSimulating) return;
+		isSimulating = true;
+		updateSimStatus('Simulating...', true);
+
+		try {
+			const response = await fetch("{% url 'api_simulate' %}", {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({ steps: numSteps })
+			});
+			const result = await response.json();
+			if (result.status === 'ok') {
+				simulatedStep = result.current_step;
+				queuedMovements = result.queued_movements;
+			} else if (result.error) {
+				console.error('[SIM] Backend error:', result.error);
+			}
+		} catch (error) {
+			console.error('[SIM] Request failed:', error);
+		}
+
+		isSimulating = false;
+		updateSimStatus('Ready', false);
+	}
+
+	function updateSimStatus(text, simulating) {
+		const statusEl = document.getElementById('sim-status');
+		const textEl = document.getElementById('sim-status-text');
+		if (textEl) textEl.textContent = text;
+		if (statusEl) {
+			if (simulating) {
+				statusEl.classList.add('simulating');
+			} else {
+				statusEl.classList.remove('simulating');
+			}
+		}
+	}
+
+	// ==========================================================================
+	// Movement Polling
 	// ==========================================================================
 
 	async function pollMovements() {
-		/**
-		 * Poll backend for pending movements to animate.
-		 * Backend (CLI) drives simulation, frontend just displays.
-		 */
 		try {
 			const response = await fetch("{% url 'api_movements' %}");
 			const result = await response.json();
 
 			if (result.empty) {
-				// No pending movements - wait a bit before polling again
+				queuedMovements = 0;  // Backend queue is empty, reset our count
 				await new Promise(r => setTimeout(r, 500));
-				return false;
+				return { hasMovements: false, hadNewAction: false };
 			}
 
 			if (result.error) {
-				console.error('Poll failed:', result.error);
+				console.error('[POLL] Error:', result.error);
 				await new Promise(r => setTimeout(r, 1000));
-				return false;
+				return { hasMovements: false, hadNewAction: false };
 			}
 
-			// Got movements from backend - queue for animation
 			execute_movement = result;
 			execute_count = execute_count_max;
-			return true;
+			const hadNewAction = result.meta && result.meta.had_new_action;
+			return { hasMovements: true, hadNewAction: hadNewAction, movement: result };
 
 		} catch (error) {
-			console.error('Poll request failed:', error);
+			console.error('[POLL] Request failed:', error);
 			await new Promise(r => setTimeout(r, 1000));
-			return false;
+			return { hasMovements: false, hadNewAction: false };
 		}
 	}
 
-	function animateMovements() {
-		/**
-		 * Animate one frame of movement. Called from update().
-		 * Returns true when animation is complete.
-		 */
-		if (!execute_movement || execute_count <= 0) {
-			return true;  // Nothing to animate
+	// Skip mode just sets a flag - the update() loop handles the rest
+	// When skipping: runs at max speed, auto-pauses when LLM action detected
+	function startSkipMode() {
+		isSkipping = true;
+		isPaused = false;  // Unpause to let update() run
+		updateButtonStates();
+		updateSimStatus('Skipping to next action...', false);
+	}
+
+	// Called when we detect an LLM action during skip mode
+	function handleSkipActionFound(movement) {
+		if (!isSkipping) return;
+
+		const activePersonas = movement.meta?.active_personas || [];
+		if (activePersonas.length > 0) {
+			// Center on the first active persona
+			const personaName = activePersonas[0];
+			const personaData = movement.persona[personaName];
+			if (personaData && mainCamera) {
+				const targetX = personaData.movement[0] * tile_width;
+				const targetY = personaData.movement[1] * tile_width;
+				mainCamera.pan(targetX, targetY, 300, 'Power2');
+				console.log('[SKIP] Centering on active persona:', personaName);
+			}
 		}
 
-		// Update time display
+		// Stop skipping and pause
+		isSkipping = false;
+		isPaused = true;
+		updateButtonStates();
+		updateSimStatus('Ready', false);
+	}
+
+	function getAnimationDelay() {
+		// During skip mode, run at max speed (no delay)
+		if (isSkipping) return 0;
+		return Math.max(10, 400 - (playbackSpeed * 40));
+	}
+
+	function animateMovements() {
+		if (!execute_movement || execute_count <= 0) {
+			return true;
+		}
+
 		document.getElementById("game-time-content").innerHTML = execute_movement["meta"]["curr_time"];
 
 		for (let i = 0; i < Object.keys(personas).length; i++) {
@@ -168,20 +227,17 @@
 			let curr_persona = personas[curr_persona_name];
 			let curr_pronunciatio = pronunciatios[curr_persona_name];
 
-			// Initialize movement target at start of animation
 			if (execute_count == execute_count_max) {
 				let curr_x = execute_movement["persona"][curr_persona_name]["movement"][0];
 				let curr_y = execute_movement["persona"][curr_persona_name]["movement"][1];
 				movement_target[curr_persona_name] = [curr_x * tile_width, curr_y * tile_width];
 
-				// Update pronunciatio (emoji speech bubble)
 				let pronunciatio_content = execute_movement["persona"][curr_persona_name]["pronunciatio"];
 				let rgx = new RegExp(/(\p{L}{1})\p{L}+/, 'gu');
 				let initials = [...curr_persona_name.matchAll(rgx)] || [];
 				initials = ((initials.shift()?.[1] || '') + (initials.pop()?.[1] || '')).toUpperCase();
 				pronunciatios[curr_persona_name].setText(initials + ": " + pronunciatio_content);
 
-				// Update action descriptions in UI
 				let curr_persona_name_os = curr_persona_name.replace(/ /g, "_");
 				let description_content = execute_movement["persona"][curr_persona_name]["description"];
 				let chat_content = "";
@@ -192,7 +248,7 @@
 						                execute_movement["persona"][curr_persona_name]["chat"][j][1] + "<br>";
 					}
 				} else {
-					chat_content = "<em>None at the moment</em>";
+					chat_content = "<em>None</em>";
 				}
 
 				document.getElementById("current_action__" + curr_persona_name_os).innerHTML = description_content.split("@")[0];
@@ -200,7 +256,6 @@
 				document.getElementById("chat__" + curr_persona_name_os).innerHTML = chat_content;
 			}
 
-			// Move sprite towards target
 			if (curr_persona.body.x < movement_target[curr_persona_name][0]) {
 				curr_persona.body.x += movement_speed;
 				anims_direction = "r";
@@ -221,11 +276,9 @@
 				anims_direction = "";
 			}
 
-			// Update pronunciatio position
 			curr_pronunciatio.x = curr_persona.body.x - 6;
 			curr_pronunciatio.y = curr_persona.body.y - 42 - 32;
 
-			// Play walking animation
 			let animKey = curr_persona.spriteKey || "misa";
 			if (anims_direction == "l") {
 				curr_persona.anims.play(animKey + "-left-walk", true);
@@ -237,7 +290,6 @@
 				curr_persona.anims.play(animKey + "-front-walk", true);
 			} else {
 				curr_persona.anims.stop();
-				// Set idle frame
 				if (curr_persona.spriteKey) {
 					if (pre_anims_direction_dict[curr_persona_name] == "l") curr_persona.setFrame(4);
 					else if (pre_anims_direction_dict[curr_persona_name] == "r") curr_persona.setFrame(7);
@@ -254,20 +306,16 @@
 
 		execute_count--;
 
-		// Check if animation is complete
 		if (execute_count <= 0) {
-			// Snap all personas to final positions
 			for (let persona_name in personas) {
 				personas[persona_name].body.x = movement_target[persona_name][0];
 				personas[persona_name].body.y = movement_target[persona_name][1];
 			}
-			// Update step from backend response (backend is authoritative)
-			// The backend sends the step BEFORE incrementing, so add 1
 			step = execute_movement["meta"]["step"] + 1;
-			return true;  // Animation complete
+			return true;
 		}
 
-		return false;  // Animation still in progress
+		return false;
 	}
 
 
@@ -275,29 +323,7 @@
 	// ENGINE
 	// ###########################################################################
 
-	// Joon: Phaser 3.0 is oriented around "scenes" -- recall how Pokemon plays:
-	//       there is the outdoor space, and then there is the indoor space; when
-	//       you go inside, you transition to a new "scene" and the outdoor space
-	//       basically disappears.
-	//       A scene in Phaser has four key methods that are called at different
-	//       stages of rendering for different purposes. They are:
-	//       init() -> preload() -> create() -> update()
-	//         init() is called only once at the very beginning. This is the
-	//           initialization function in case that is needed.
-	//         preload() is called once and preloads any of the assets
-	//         create() is also called once after preloading... creates sprites
-	//           and actually displays stuff
-	//         update() is called on each frame during the game play
-
 	function preload() {
-	  // Loading the necessary images (e.g., the background image, character
-	  // sprites).
-
-	  // Joon: for load.image, the first parameter is simply the key value that
-	  //       you are passing in. The second parameter should be pointed to the
-	  //       png file that contains the tileset.
-	  //       Also IMPORTANT: when you create a tileset in Tiled, always be
-	  //       sure to check the "embedded" option.
 	  this.load.image("blocks_1", "{% static 'assets/the_ville/visuals/map_assets/blocks/blocks_1.png' %}");
 	  this.load.image("walls", "{% static 'assets/the_ville/visuals/map_assets/v1/Room_Builder_32x32.png' %}");
 	  this.load.image("interiors_pt1", "{% static 'assets/the_ville/visuals/map_assets/v1/interiors_pt1.png' %}");
@@ -315,26 +341,12 @@
 	  this.load.image("CuteRPG_Desert_B", "{% static 'assets/the_ville/visuals/map_assets/cute_rpg_word_VXAce/tilesets/CuteRPG_Desert_B.png' %}");
 	  this.load.image("CuteRPG_Forest_C", "{% static 'assets/the_ville/visuals/map_assets/cute_rpg_word_VXAce/tilesets/CuteRPG_Forest_C.png' %}");
 
-	  // Joon: This is the export json file you get from Tiled.
 	  this.load.tilemapTiledJSON("map", "{% static 'assets/the_ville/visuals/the_ville_jan7.json' %}");
 
-	  // An atlas is a way to pack multiple images together into one texture. I'm
-	  // using it to load all the player animations (walking left, walking right,
-	  // etc.) in one image. For more info see:
-	  // https://labs.phaser.io/view.html?src=src/animation/texture%20atlas%20animation.js
-	  // If you don't use an atlas, you can do the same thing with a spritesheet,
-	  // see: https://labs.phaser.io/view.html?src=src/animation/single%20sprite%20sheet.js
-	  // Joon: Technically, I think this guy had the best tutorial for atlas:
-	  //       https://www.youtube.com/watch?v=fdXcD9X4NrQ&ab_channel=MorganPage
-
-	  // Load the fallback misa atlas for camera player and any missing personas
 	  this.load.atlas("atlas",
 	                  "https://mikewesthad.github.io/phaser-3-tilemap-blog-posts/post-1/assets/atlas/atlas.png",
 	                  "https://mikewesthad.github.io/phaser-3-tilemap-blog-posts/post-1/assets/atlas/atlas.json");
 
-	  // Load unique character sprite sheets for each persona
-	  // Each character PNG is a 96x128 spritesheet (3 cols x 4 rows of 32x32 frames)
-	  // Rows: down, left, right, up
 	  for (let persona_name in persona_names) {
 	    let sprite_key = persona_name.replace(/ /g, "_");
 	    this.load.spritesheet(sprite_key,
@@ -346,15 +358,7 @@
 
 	function create() {
 	  const map = this.make.tilemap({ key: "map" });
-	  // Joon: Logging map is really helpful for debugging here:
-	  //       console.log(map);
 
-	  // The first parameter is the name you gave to the tileset in Tiled and then
-	  // the key of the tileset image in Phaser's cache (i.e. the name you used in
-	  // preload)
-	  // Joon: for the first parameter here, really take a look at the
-	  //       console.log(map) output. You need to make sure that the name
-	  //       matches.
 	  const collisions = map.addTilesetImage("blocks", "blocks_1");
 	  const walls = map.addTilesetImage("Room_Builder_32x32", "walls");
 	  const interiors_pt1 = map.addTilesetImage("interiors_pt1", "interiors_pt1");
@@ -372,16 +376,10 @@
 	  const CuteRPG_Desert_B = map.addTilesetImage("CuteRPG_Desert_B", "CuteRPG_Desert_B");
 	  const CuteRPG_Forest_C = map.addTilesetImage("CuteRPG_Forest_C", "CuteRPG_Forest_C");
 
-	  // The first parameter is the layer name (or index) taken from Tiled, the
-	  // second parameter is the tileset you set above, and the final two
-	  // parameters are the x, y coordinate.
-	  // Joon: The "layer name" that comes as the first parameter value
-	  //       literally is taken from our Tiled layer name. So to find out what
-	  //       they are; you actually need to open up tiled and see how you
-	  //       named things there.
 	  let tileset_group_1 = [CuteRPG_Field_B, CuteRPG_Field_C, CuteRPG_Harbor_C, CuteRPG_Village_B,
 	  											 CuteRPG_Forest_B, CuteRPG_Desert_C, CuteRPG_Mountains_B, CuteRPG_Desert_B, CuteRPG_Forest_C,
 	  											 interiors_pt1, interiors_pt2, interiors_pt3, interiors_pt4, interiors_pt5, walls];
+
 	  const bottomGroundLayer = map.createLayer("Bottom Ground", tileset_group_1, 0, 0);
 	  const exteriorGroundLayer = map.createLayer("Exterior Ground", tileset_group_1, 0, 0);
 	  const exteriorDecorationL1Layer = map.createLayer("Exterior Decoration L1", tileset_group_1, 0, 0);
@@ -396,73 +394,79 @@
 	  foregroundL2Layer.setDepth(2);
 
 	  const collisionsLayer = map.createLayer("Collisions", collisions, 0, 0);
-	  // const groundLayer = map.createLayer("Ground", walls, 0, 0);
-	  // const indoorGroundLayer = map.createLayer("Indoor Ground", walls, 0, 0);
-	  // const wallsLayer = map.createLayer("Walls", walls, 0, 0);
-	  // const interiorsLayer = map.createLayer("Furnitures", interiors, 0, 0);
-	  // const builtInLayer = map.createLayer("Built-ins", interiors, 0, 0);
-	  // const appliancesLayer = map.createLayer("Appliances", interiors, 0, 0);
-	  // const foregroundLayer = map.createLayer("Foreground", interiors, 0, 0);
-
-	  // Joon : This is where you want to create a custom field for the tileset
-	  //        in Tiled. Take a look at this guy's tutorial:
-	  //        https://www.youtube.com/watch?v=MR2CvWxOEsw&ab_channel=MattWilber
 	  collisionsLayer.setCollisionByProperty({ collide: true });
-	  // By default, everything gets depth sorted on the screen in the order we
-	  // created things. Here, we want the "Above Player" layer to sit on top of
-	  // the player, so we explicitly give it a depth. Higher depths will sit on
-	  // top of lower depth objects.
-	  // Collisions layer should get a negative depth since we do not want to see
-	  // it.
 	  collisionsLayer.setDepth(-1);
-	  // foregroundL1Layer.setDepth(2);
-	  // foregroundL1Layer.setDepth(2);
 
-	  // *** SET UP CAMERA ***
-	  // "player" is to be set as the center of mass for our "camera." We
-	  // basically create a game character sprite as we would for our personas
-	  // but we move it to depth -1 and let it pass through the collision map;
-	  // that is, do not have the following line:
-	  // this.physics.add.collider(player, collisionsLayer);
-	  // OLD NOTE: Create a sprite with physics enabled via the physics system.
-	  // The image  used for the sprite has a bit of whitespace, so I'm using
-	  // setSize & setOffset to control the size of the player's body.
-	  player = this.physics.add.
-	                sprite(800, 288, "atlas", "misa-front").
-	                setSize(30, 40).
-	                setOffset(0, 0);
-	  player.setDepth(-1);
-	  // Setting up the camera.
+	  // *** SET UP CAMERA - Mouse drag panning ***
 	  const camera = this.cameras.main;
-	  camera.startFollow(player);
+	  mainCamera = camera;
+	  mapBounds = { width: map.widthInPixels, height: map.heightInPixels };
+
 	  camera.setBounds(0, 0, map.widthInPixels, map.heightInPixels);
-	  cursors = this.input.keyboard.createCursorKeys();
+	  camera.centerOn(map.widthInPixels / 2, map.heightInPixels / 2);
+
+	  // Mouse drag panning
+	  this.input.on('pointerdown', function(pointer) {
+	    if (pointer.button === 0) {  // Left mouse button
+	      isDragging = true;
+	      dragStart.x = pointer.x;
+	      dragStart.y = pointer.y;
+	      scrollStart.x = camera.scrollX;
+	      scrollStart.y = camera.scrollY;
+	    }
+	  });
+
+	  this.input.on('pointermove', function(pointer) {
+	    if (isDragging && pointer.isDown) {
+	      const dx = pointer.x - dragStart.x;
+	      const dy = pointer.y - dragStart.y;
+	      camera.scrollX = scrollStart.x - dx / camera.zoom;
+	      camera.scrollY = scrollStart.y - dy / camera.zoom;
+	    }
+	  });
+
+	  this.input.on('pointerup', function(pointer) {
+	    isDragging = false;
+	  });
+
+	  // Mouse wheel zoom
+	  this.input.on('wheel', function(pointer, gameObjects, deltaX, deltaY, deltaZ) {
+	    if (deltaY < 0) {
+	      zoomLevel = Math.min(zoomMax, zoomLevel + zoomStep);
+	    } else if (deltaY > 0) {
+	      zoomLevel = Math.max(zoomMin, zoomLevel - zoomStep);
+	    }
+
+	    camera.setZoom(zoomLevel);
+
+	    const zoomIndicator = document.getElementById('zoom-indicator');
+	    if (zoomIndicator) {
+	      zoomIndicator.textContent = Math.round(zoomLevel * 100) + '%';
+	    }
+	  });
+
+	  // Handle window resize
+	  this.scale.on('resize', function(gameSize) {
+	    camera.setViewport(0, 0, gameSize.width, gameSize.height);
+	  });
 
 	  // *** SET UP PERSONAS ***
-	  // We start by creating the game sprite objects.
 	  const anims = this.anims;
 
 	  for (let i=0; i<Object.keys(spawn_tile_loc).length; i++) {
 	    let persona_name = Object.keys(spawn_tile_loc)[i];
 	    let sprite_key = persona_name.replace(/ /g, "_");
-	    let start_pos = [spawn_tile_loc[persona_name][0] * tile_width + tile_width / 2,
-	                     spawn_tile_loc[persona_name][1] * tile_width + tile_width];
+	    // Use same coordinate system as movement_target in animateMovements()
+	    let start_pos = [spawn_tile_loc[persona_name][0] * tile_width,
+	                     spawn_tile_loc[persona_name][1] * tile_width];
 
-	    // Check if persona-specific spritesheet exists, otherwise fall back to misa
 	    let new_sprite;
 	    if (this.textures.exists(sprite_key)) {
-	      // Use persona-specific sprite (frame 1 is the front-facing idle frame)
 	      new_sprite = this.physics.add
 	                       .sprite(start_pos[0], start_pos[1], sprite_key, 1)
 	                       .setSize(30, 40)
 	                       .setOffset(0, 32);
 
-	      // Create persona-specific animations
-	      // Spritesheet layout (96x128 = 3 cols x 4 rows):
-	      // Row 0 (frames 0-2): down/front walk
-	      // Row 1 (frames 3-5): left walk
-	      // Row 2 (frames 6-8): right walk
-	      // Row 3 (frames 9-11): up/back walk
 	      anims.create({
 	        key: sprite_key + "-front-walk",
 	        frames: anims.generateFrameNumbers(sprite_key, { frames: [0, 1, 2, 1] }),
@@ -487,21 +491,21 @@
 	        frameRate: 4,
 	        repeat: -1 });
 	    } else {
-	      // Fall back to misa atlas for missing personas
 	      new_sprite = this.physics.add
 	                       .sprite(start_pos[0], start_pos[1], "atlas", "misa-front")
 	                       .setSize(30, 40)
 	                       .setOffset(0, 32);
 	    }
 
-	    // Here, we are creating the persona and its pronunciatio sprites.
 	    personas[persona_name] = new_sprite;
-	    // Store the sprite key for animation lookups
 	    personas[persona_name].spriteKey = this.textures.exists(sprite_key) ? sprite_key : null;
+
+	    // Initialize movement target to match spawn position
+	    movement_target[persona_name] = [start_pos[0], start_pos[1]];
 
 	    pronunciatios[persona_name] = this.add.text(
 	                                   new_sprite.body.x - 6,
-	                                   new_sprite.body.y - 42 - 32, // DEBUG 1 --- I added 32 offset on Dec 29.
+	                                   new_sprite.body.y - 42 - 32,
 	                                   "🦁", {
 	                                   font: "28px monospace",
 	                                   fill: "#000000",
@@ -511,7 +515,7 @@
 	                                   borderRadius:"10px"}).setDepth(3);
 	  }
 
-	  // Create the misa walking animations as fallback (used for camera and missing personas)
+	  // Fallback misa animations
 	  anims.create({
 	    key: "misa-left-walk",
 	    frames: anims.generateFrameNames("atlas", { prefix: "misa-left-walk.", start: 0, end: 3, zeroPad: 3 }),
@@ -539,62 +543,250 @@
 
 
 	function update(time, delta) {
-		// *** SETUP PLAY AND PAUSE BUTTON ***
-		let play_context = this;
-		function game_resume() {
-			play_context.scene.resume();
-		}
-		play_button.onclick = function(){
-			game_resume();
-		};
-		function game_pause() {
-			play_context.scene.pause();
-		}
-		pause_button.onclick = function(){
-			game_pause();
-		};
-
-	  // *** MOVE CAMERA ***
-	  // This is where we finish up the camera setting we started in the create()
-	  // function. We set the movement speed of the camera and wire up the keys to
-	  // map to the actual movement.
-	  const camera_speed = 400;
-	  // Stop any previous movement from the last frame
-	  player.body.setVelocity(0);
-	  if (cursors.left.isDown) {
-	    player.body.setVelocityX(-camera_speed);
-	  }
-	  if (cursors.right.isDown) {
-	    player.body.setVelocityX(camera_speed);
-	  }
-	  if (cursors.up.isDown) {
-	    player.body.setVelocityY(-camera_speed);
-	  }
-	  if (cursors.down.isDown) {
-	    player.body.setVelocityY(camera_speed);
+	  // Skip if paused or menu open (but NOT if skipping - we want to run fast during skip)
+	  if (isPaused || isMenuOpen()) {
+	    return;
 	  }
 
-	  // *** MOVE PERSONAS ***
-	  // Frontend polls for movements from backend (CLI drives simulation)
-	  // 1. If animation in progress, continue animating
-	  // 2. If no animation and no poll in progress, poll for movements
-	  // 3. Otherwise, wait for poll to complete
+	  // Throttle animation speed (getAnimationDelay returns 0 during skip mode)
+	  const now = Date.now();
+	  if (now - lastAnimationTime < getAnimationDelay()) {
+	    return;
+	  }
+	  lastAnimationTime = now;
 
 	  if (execute_count > 0) {
-	    // Animation in progress - continue it
+	    // Animation in progress
 	    animateMovements();
 	  }
 	  else if (!pollInProgress) {
-	    // No animation, no pending poll - check for new movements
+	    // No animation, check for movements and maybe request more simulation
 	    pollInProgress = true;
-	    pollMovements().then(hasMovements => {
+	    pollMovements().then(result => {
 	      pollInProgress = false;
+
+	      if (result.hasMovements) {
+	        displayedStep++;
+	        queuedMovements = Math.max(0, queuedMovements - 1);
+
+	        // During skip mode, check if this movement had an LLM action
+	        if (isSkipping && result.hadNewAction) {
+	          handleSkipActionFound(result.movement);
+	        }
+	      }
+
+	      // Auto-request more simulation if buffer is low and simulation is active
+	      if (simulationActive && !isSimulating && queuedMovements <= TARGET_BUFFER) {
+	        requestSimulation(BATCH_SIZE);
+	      }
 	    });
 	  }
-	  // else: waiting for poll to complete
 	}
 
-	// Control button binders
-	var play_button=document.getElementById("play_button");
-	var pause_button=document.getElementById("pause_button");
+	function isMenuOpen() {
+	  const menu = document.getElementById('menu-overlay');
+	  return menu && !menu.classList.contains('hidden');
+	}
+
+	// ==========================================================================
+	// Control Button Handlers
+	// ==========================================================================
+
+	function updateButtonStates() {
+		const playBtn = document.getElementById("play_button");
+		const pauseBtn = document.getElementById("pause_button");
+		const skipBtn = document.getElementById("skip_button");
+
+		// Remove active class from all
+		playBtn.classList.remove('active');
+		pauseBtn.classList.remove('active');
+
+		if (isSkipping) {
+			playBtn.disabled = true;
+			pauseBtn.disabled = false;
+			skipBtn.disabled = true;
+			skipBtn.querySelector('.icon').textContent = '⏳';
+		} else if (isPaused) {
+			playBtn.disabled = false;
+			pauseBtn.disabled = true;
+			skipBtn.disabled = false;
+			skipBtn.querySelector('.icon').textContent = '⏭';
+			pauseBtn.classList.add('active');
+		} else {
+			playBtn.disabled = true;
+			pauseBtn.disabled = false;
+			skipBtn.disabled = false;
+			skipBtn.querySelector('.icon').textContent = '⏭';
+			playBtn.classList.add('active');
+		}
+	}
+
+	// Play button
+	document.getElementById("play_button").addEventListener("click", function() {
+		isPaused = false;
+		isSkipping = false;
+		updateButtonStates();
+	});
+
+	// Pause button
+	document.getElementById("pause_button").addEventListener("click", function() {
+		isPaused = true;
+		isSkipping = false;
+		updateButtonStates();
+	});
+
+	// Skip to next action button
+	document.getElementById("skip_button").addEventListener("click", function() {
+		if (!isSkipping) {
+			startSkipMode();
+		}
+	});
+
+	// Speed slider
+	document.getElementById("speed_slider").addEventListener("input", function(e) {
+		playbackSpeed = parseInt(e.target.value);
+		document.getElementById("speed_label").textContent = playbackSpeed + "x";
+	});
+
+	// ==========================================================================
+	// Panel Controls
+	// ==========================================================================
+
+	// Toggle panel collapse
+	document.getElementById('toggle-panel').addEventListener('click', function() {
+		const panel = document.getElementById('persona-panel');
+		panel.classList.toggle('collapsed');
+	});
+
+	// Click persona card to center camera on that persona
+	document.querySelectorAll('.persona-card').forEach(function(card) {
+		card.addEventListener('click', function() {
+			const personaName = this.getAttribute('data-persona-name');
+			if (personaName && personas[personaName] && mainCamera) {
+				const personaSprite = personas[personaName];
+				mainCamera.pan(personaSprite.body.x, personaSprite.body.y, 500, 'Power2');
+			}
+		});
+	});
+
+	// Initialize button states
+	updateButtonStates();
+
+	// ==========================================================================
+	// Menu System (ESC key)
+	// ==========================================================================
+
+	function toggleMenu() {
+		const menu = document.getElementById('menu-overlay');
+		if (menu.classList.contains('hidden')) {
+			openMenu();
+		} else {
+			closeMenu();
+		}
+	}
+
+	function openMenu() {
+		const menu = document.getElementById('menu-overlay');
+		menu.classList.remove('hidden');
+
+		// Update current sim info
+		document.getElementById('menu-sim-info').textContent =
+			`${sim_code} - Step ${displayedStep}`;
+
+		// Load saves list
+		loadSavesList();
+	}
+
+	function closeMenu() {
+		const menu = document.getElementById('menu-overlay');
+		menu.classList.add('hidden');
+	}
+
+	async function loadSavesList() {
+		const savesList = document.getElementById('saves-list');
+		savesList.innerHTML = '<p class="saves-loading">Loading...</p>';
+
+		try {
+			const response = await fetch("{% url 'api_saves' %}");
+			const result = await response.json();
+
+			if (result.saves && result.saves.length > 0) {
+				savesList.innerHTML = result.saves.map(save => `
+					<div class="save-item ${save.sim_code === sim_code ? 'current' : ''}"
+						 data-sim-code="${save.sim_code}">
+						<div>
+							<div class="save-name">${save.sim_code}</div>
+							<div class="save-info">Step ${save.step} - ${save.personas.length} personas</div>
+						</div>
+						<div class="save-info">${save.curr_time}</div>
+					</div>
+				`).join('');
+
+				// Add click handlers
+				savesList.querySelectorAll('.save-item').forEach(item => {
+					item.addEventListener('click', function() {
+						const saveCode = this.getAttribute('data-sim-code');
+						if (saveCode !== sim_code) {
+							// Would need page reload to load different sim
+							alert('Loading different simulations requires restarting the backend with that save.');
+						}
+					});
+				});
+			} else {
+				savesList.innerHTML = '<p class="saves-loading">No saves found</p>';
+			}
+		} catch (error) {
+			savesList.innerHTML = '<p class="saves-loading">Failed to load saves</p>';
+		}
+	}
+
+	async function saveGame() {
+		const saveBtn = document.getElementById('menu-save-btn');
+		saveBtn.disabled = true;
+		saveBtn.textContent = 'Saving...';
+
+		try {
+			const response = await fetch("{% url 'api_save' %}", { method: 'POST' });
+			const result = await response.json();
+
+			if (result.status === 'saved') {
+				saveBtn.textContent = 'Saved!';
+				setTimeout(() => {
+					saveBtn.textContent = 'Save Game';
+					saveBtn.disabled = false;
+				}, 2000);
+				// Refresh saves list
+				loadSavesList();
+			} else {
+				saveBtn.textContent = 'Save Failed';
+				saveBtn.disabled = false;
+			}
+		} catch (error) {
+			saveBtn.textContent = 'Save Failed';
+			saveBtn.disabled = false;
+		}
+	}
+
+	// ESC key handler
+	document.addEventListener('keydown', function(e) {
+		if (e.key === 'Escape') {
+			toggleMenu();
+		}
+	});
+
+	// Menu button handlers
+	document.getElementById('menu-save-btn').addEventListener('click', saveGame);
+	document.getElementById('menu-resume-btn').addEventListener('click', closeMenu);
+
+	// Click outside menu to close
+	document.getElementById('menu-overlay').addEventListener('click', function(e) {
+		if (e.target === this) {
+			closeMenu();
+		}
+	});
+
+	// Initial simulation request to get things started
+	if (simulationActive) {
+		requestSimulation(TARGET_BUFFER);
+	}
 </script>

@@ -66,6 +66,37 @@ def api_save(request):
         return JsonResponse({"error": str(e)}, status=502)
 
 
+@csrf_exempt
+def api_simulate(request):
+    """Request simulation steps from backend."""
+    if request.method != "POST":
+        return JsonResponse({"error": "POST required"}, status=405)
+
+    try:
+        data = json.loads(request.body) if request.body else {}
+        response = requests.post(
+            f"{BACKEND_URL}/simulate",
+            json=data,
+            timeout=60,  # LLM calls can take time
+        )
+        response.raise_for_status()
+        return JsonResponse(response.json())
+    except requests.Timeout:
+        return JsonResponse({"error": "Simulation timeout"}, status=504)
+    except requests.RequestException as e:
+        return JsonResponse({"error": str(e)}, status=502)
+
+
+def api_saves(request):
+    """List available saves from backend."""
+    try:
+        response = requests.get(f"{BACKEND_URL}/saves", timeout=5)
+        response.raise_for_status()
+        return JsonResponse(response.json())
+    except requests.RequestException as e:
+        return JsonResponse({"error": str(e)}, status=502)
+
+
 # =============================================================================
 # Page Views
 # =============================================================================
