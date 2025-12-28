@@ -591,6 +591,21 @@ html, body {
   background: #4CAF50;
 }
 
+.chat-tab.new {
+  animation: tabHighlight 1.5s ease-out;
+}
+
+@keyframes tabHighlight {
+  0%, 30% {
+    background: #7dd87d;
+    transform: scale(1.05);
+  }
+  100% {
+    background: rgba(255, 255, 255, 0.1);
+    transform: scale(1);
+  }
+}
+
 .chat-minimize {
   background: none;
   border: none;
@@ -649,6 +664,20 @@ html, body {
 
 .chat-bubble:last-child {
   margin-bottom: 0;
+}
+
+.chat-bubble.new .message {
+  background: rgba(125, 216, 125, 0.25);
+  animation: messageHighlight 1.5s ease-out forwards;
+}
+
+@keyframes messageHighlight {
+  0%, 30% {
+    background: rgba(125, 216, 125, 0.25);
+  }
+  100% {
+    background: rgba(255, 255, 255, 0.08);
+  }
 }
 
 .chat-bubble .speaker {

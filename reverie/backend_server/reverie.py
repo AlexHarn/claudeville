@@ -81,6 +81,25 @@ class ConversationGroup:
         """Get participant names as comma-separated string."""
         return ", ".join(sorted(self.participants))
 
+    def remove_participant(self, name: str) -> bool:
+        """Remove a participant from the conversation. Returns True if removed."""
+        if name in self.participants:
+            self.participants.discard(name)
+            return True
+        return False
+
+
+def _tile_distance(tile1: tuple, tile2: tuple) -> float:
+    """Calculate Euclidean distance between two tiles."""
+    if not tile1 or not tile2:
+        return float("inf")
+    return math.sqrt((tile1[0] - tile2[0]) ** 2 + (tile1[1] - tile2[1]) ** 2)
+
+
+def _are_within_range(tile1: tuple, tile2: tuple, vision_r: int = 4) -> bool:
+    """Check if two tiles are within vision range of each other."""
+    return _tile_distance(tile1, tile2) <= vision_r
+
 
 # Backend HTTP server port
 BACKEND_PORT = 5000
@@ -299,33 +318,48 @@ class ReverieServer:
             Request body: {"steps": N} where N is number of steps to simulate.
             Returns immediately after queueing the steps.
             """
-            data = request.get_json() or {}
-            num_steps = min(data.get("steps", 1), 10)  # Cap at 10 steps per request
+            # Check if a step is already in progress (non-blocking)
+            if not self._step_lock.acquire(blocking=False):
+                # Step already running - return current state without running more
+                return jsonify(
+                    {
+                        "status": "busy",
+                        "message": "Step already in progress",
+                        "current_step": self.step,
+                        "queued_movements": len(self._pending_movements),
+                    }
+                )
 
-            # Build environment data from current state
-            environment = {}
-            for persona_name in self.personas:
-                tile = self.personas_tile[persona_name]
-                environment[persona_name] = {"x": tile[0], "y": tile[1]}
+            try:
+                data = request.get_json() or {}
+                num_steps = min(data.get("steps", 1), 10)  # Cap at 10 steps per request
 
-            # Run the steps (movements get queued automatically)
-            for i in range(num_steps):
-                # Print step header like CLI does
-                cli.print_step_start(self.step, self.curr_time)
-                self._process_step({"environment": environment})
-                # Update environment for next step
+                # Build environment data from current state
+                environment = {}
                 for persona_name in self.personas:
                     tile = self.personas_tile[persona_name]
                     environment[persona_name] = {"x": tile[0], "y": tile[1]}
 
-            return jsonify(
-                {
-                    "status": "ok",
-                    "steps_run": num_steps,
-                    "current_step": self.step,
-                    "queued_movements": len(self._pending_movements),
-                }
-            )
+                # Run the steps (movements get queued automatically)
+                for i in range(num_steps):
+                    # Print step header like CLI does
+                    cli.print_step_start(self.step, self.curr_time)
+                    self._process_step_unlocked({"environment": environment})
+                    # Update environment for next step
+                    for persona_name in self.personas:
+                        tile = self.personas_tile[persona_name]
+                        environment[persona_name] = {"x": tile[0], "y": tile[1]}
+
+                return jsonify(
+                    {
+                        "status": "ok",
+                        "steps_run": num_steps,
+                        "current_step": self.step,
+                        "queued_movements": len(self._pending_movements),
+                    }
+                )
+            finally:
+                self._step_lock.release()
 
         @self.flask_app.route("/saves", methods=["GET"])
         def handle_list_saves():
@@ -469,7 +503,13 @@ class ReverieServer:
         # After all personas have moved in parallel, synchronize their chats.
         # If Klaus is chatting with Maria and Maria is chatting with Klaus,
         # merge their chat lists so both have the full conversation.
-        self._synchronize_conversations()
+        try:
+            self._synchronize_conversations()
+        except Exception as e:
+            cli.print_error(f"Error in conversation sync: {e}")
+            import traceback
+
+            traceback.print_exc()
 
         # Update movements with synchronized chat data
         # This ensures frontend receives the complete merged conversation
@@ -506,15 +546,55 @@ class ReverieServer:
         Synchronize chat histories between personas who are in conversation.
 
         After all personas have moved in parallel, this method:
-        1. Manages ConversationGroup objects for multi-party conversations
-        2. Detects conversations and groups participants together
-        3. Merges chat lines so all participants see the full conversation
-        4. Allows nearby personas to join ongoing conversations
+        1. Removes participants who have moved out of range
+        2. Manages ConversationGroup objects for multi-party conversations
+        3. Detects conversations and groups participants together (with proximity checks)
+        4. Merges chat lines so all participants see the full conversation
         5. Stores completed conversations in all participants' memories
 
         This is critical because personas run in parallel and don't see each
         other's dialogue responses within a single simulation step.
         """
+        # Step 0: Remove out-of-range participants from existing groups
+        # This handles cases where personas walked away from the conversation
+        for group_id, group in list(self.active_conversations.items()):
+            if len(group.participants) < 2:
+                continue
+
+            # Find participants who are no longer within range of ANY other participant
+            to_remove = []
+            for participant in group.participants:
+                if participant not in self.personas:
+                    to_remove.append(participant)
+                    continue
+
+                my_tile = self.personas_tile.get(participant)
+                vision_r = self.personas[participant].scratch.vision_r
+
+                # Check if this participant is within range of at least one other
+                has_nearby_partner = False
+                for other in group.participants:
+                    if other == participant or other not in self.personas:
+                        continue
+                    other_tile = self.personas_tile.get(other)
+                    if _are_within_range(my_tile, other_tile, vision_r):
+                        has_nearby_partner = True
+                        break
+
+                if not has_nearby_partner:
+                    to_remove.append(participant)
+
+            # Remove out-of-range participants and end their conversation
+            for participant in to_remove:
+                if participant in self.personas:
+                    persona = self.personas[participant]
+                    cli.print_info(
+                        f"  {participant} left conversation [{group_id}] (moved out of range)"
+                    )
+                    self._end_and_store_conversation(persona)
+                    persona.scratch.conversation_group_id = None
+                group.remove_participant(participant)
+
         # Step 1: Build mapping of persona -> existing group from scratch
         # This ensures we reuse existing groups instead of creating new ones
         persona_to_group: dict[str, str] = {}
@@ -532,10 +612,12 @@ class ReverieServer:
                     persona.scratch.chat or [],
                 )
 
-        # Step 3: Find or create conversation groups
+        # Step 3: Find or create conversation groups (with proximity validation)
         for name, (partner, chat_lines) in active_chatters.items():
             group = None
             group_id = None
+            my_tile = self.personas_tile.get(name)
+            vision_r = self.personas[name].scratch.vision_r
 
             # Check if this persona is already in a group
             if name in persona_to_group:
@@ -543,17 +625,40 @@ class ReverieServer:
                 group = self.active_conversations.get(group_id)
 
             # Check if partner is already in a group we should join
+            # BUT only if we're within range of them!
             if not group and partner in persona_to_group:
-                group_id = persona_to_group[partner]
-                group = self.active_conversations.get(group_id)
-                if group:
-                    group.add_participant(name)
-                    persona_to_group[name] = group_id
-                    # Update persona's group reference
-                    self.personas[name].scratch.conversation_group_id = group_id
+                partner_tile = self.personas_tile.get(partner)
+                if _are_within_range(my_tile, partner_tile, vision_r):
+                    group_id = persona_to_group[partner]
+                    group = self.active_conversations.get(group_id)
+                    if group:
+                        group.add_participant(name)
+                        persona_to_group[name] = group_id
+                        # Update persona's group reference
+                        self.personas[name].scratch.conversation_group_id = group_id
+                else:
+                    # Partner too far away - can't join their conversation
+                    # End this persona's conversation attempt
+                    cli.print_info(
+                        f"  {name} tried to chat with {partner} but they're too far away"
+                    )
+                    self._end_and_store_conversation(self.personas[name])
+                    continue
 
             # Create new group if neither is in one
             if not group:
+                # Validate partner is within range before creating group
+                partner_tile = self.personas_tile.get(partner)
+                if partner in self.personas and not _are_within_range(
+                    my_tile, partner_tile, vision_r
+                ):
+                    # Can't start conversation - partner too far
+                    cli.print_info(
+                        f"  {name} tried to chat with {partner} but they're too far away"
+                    )
+                    self._end_and_store_conversation(self.personas[name])
+                    continue
+
                 group = ConversationGroup(
                     participants={name},
                     location_tile=self.personas_tile.get(name, (0, 0)),
@@ -565,12 +670,14 @@ class ReverieServer:
                 # Update persona's group reference
                 self.personas[name].scratch.conversation_group_id = group_id
 
-            # Add partner to group if valid persona
+            # Add partner to group if valid persona AND within range
             if partner in self.personas and partner not in group.participants:
-                group.add_participant(partner)
-                persona_to_group[partner] = group_id
-                # Update partner's group reference
-                self.personas[partner].scratch.conversation_group_id = group_id
+                partner_tile = self.personas_tile.get(partner)
+                if _are_within_range(my_tile, partner_tile, vision_r):
+                    group.add_participant(partner)
+                    persona_to_group[partner] = group_id
+                    # Update partner's group reference
+                    self.personas[partner].scratch.conversation_group_id = group_id
 
             # Merge this persona's chat lines into the group
             group.merge_lines(chat_lines)
@@ -584,7 +691,7 @@ class ReverieServer:
             full_chat = group.chat
 
             # Update each participant's scratch with the full conversation
-            for participant_name in group.participants:
+            for participant_name in list(group.participants):
                 if participant_name not in self.personas:
                     continue
 
@@ -595,8 +702,13 @@ class ReverieServer:
 
                 # If they weren't in a conversation, set them up
                 if not persona.scratch.chatting_with:
-                    # Pick any other participant as their "chatting_with"
+                    # Pick the nearest other participant as their "chatting_with"
+                    my_tile = self.personas_tile.get(participant_name)
                     others = [p for p in group.participants if p != participant_name]
+                    # Sort by distance to pick nearest
+                    others.sort(
+                        key=lambda p: _tile_distance(my_tile, self.personas_tile.get(p))
+                    )
                     if others:
                         persona.scratch.chatting_with = others[0]
                         persona.scratch.chat = list(full_chat)
@@ -616,15 +728,24 @@ class ReverieServer:
                 f"{group.get_participants_str()} ({len(group.chat)} lines)"
             )
 
-        # Step 4: Handle one-sided conversations (A talks to B, B hasn't responded)
+        # Step 5: Handle one-sided conversations (A talks to B, B hasn't responded)
+        # Only initiate if both are within range
         for name, (partner, chat_lines) in active_chatters.items():
             if partner not in self.personas:
                 continue
 
             persona_b = self.personas[partner]
 
-            # If B isn't chatting yet, set them up to respond
+            # If B isn't chatting yet, set them up to respond (if within range)
             if not persona_b.scratch.chatting_with and chat_lines:
+                my_tile = self.personas_tile.get(name)
+                partner_tile = self.personas_tile.get(partner)
+                vision_r = self.personas[name].scratch.vision_r
+
+                if not _are_within_range(my_tile, partner_tile, vision_r):
+                    # Too far apart - don't initiate conversation
+                    continue
+
                 persona_b.scratch.chatting_with = name
                 persona_b.scratch.chat = []
                 persona_b.scratch.merge_chat_lines(chat_lines)
@@ -647,7 +768,7 @@ class ReverieServer:
                     f"({len(chat_lines)} lines shared)"
                 )
 
-        # Step 6: Check for conversations that have ended
+        # Step 6: Check for conversations that have ended (by time)
         ended_groups = []
         for name, persona in self.personas.items():
             scratch = persona.scratch
@@ -661,10 +782,19 @@ class ReverieServer:
                     # Clear the group reference
                     scratch.conversation_group_id = None
 
-        # Step 7: Clean up orphaned groups where no participants are actively chatting
+        # Step 7: Clean up orphaned or single-participant groups
         for group_id, group in list(self.active_conversations.items()):
             if group_id in ended_groups:
                 continue  # Already marked for deletion
+
+            # Clean up single-participant groups (everyone else left)
+            if len(group.participants) < 2:
+                ended_groups.append(group_id)
+                for participant in group.participants:
+                    if participant in self.personas:
+                        self._end_and_store_conversation(self.personas[participant])
+                        self.personas[participant].scratch.conversation_group_id = None
+                continue
 
             # Check if ANY participant is still actively chatting
             has_active_chatter = False

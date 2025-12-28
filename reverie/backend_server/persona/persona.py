@@ -184,8 +184,10 @@ class Persona:
         # Update acknowledged nearby after LLM call
         self._acknowledged_nearby = set(nearby_personas)
 
-        # Process the step response
-        result = self._process_step_response(step_response, maze, personas)
+        # Process the step response (with nearby_personas for validation)
+        result = self._process_step_response(
+            step_response, maze, personas, nearby_personas
+        )
 
         # Check if persona is going to sleep - trigger compaction
         if step_response.action:
@@ -336,7 +338,11 @@ class Persona:
 
     def _get_nearby_personas(self, maze, personas):
         """
-        Get list of (name, activity) tuples for nearby personas.
+        Get list of (name, activity_key) tuples for nearby personas.
+
+        The activity_key is (predicate, object) from the action triplet,
+        which is more stable than the full description for detecting
+        genuinely new activities vs just rephrased descriptions.
         """
         nearby = []
         nearby_tiles = maze.get_nearby_tiles(
@@ -351,8 +357,11 @@ class Persona:
                     subject = event[0]
                     # Check if this is a persona (not an object)
                     if subject in personas and subject != self.name:
-                        activity = event[3] if len(event) > 3 else "idle"
-                        nearby.append((subject, activity))
+                        # Use (predicate, object) as activity key - more stable than description
+                        predicate = event[1] if len(event) > 1 else "is"
+                        obj = event[2] if len(event) > 2 else "idle"
+                        activity_key = (predicate, obj)
+                        nearby.append((subject, activity_key))
 
         # Remove duplicates
         return list(set(nearby))
@@ -502,7 +511,9 @@ class Persona:
         self.scratch.f_daily_schedule_hourly_org = default_schedule[:]
         self.scratch.daily_req = []
 
-    def _process_step_response(self, step_response: StepResponse, maze, personas):
+    def _process_step_response(
+        self, step_response: StepResponse, maze, personas, nearby_personas=None
+    ):
         """
         Process the StepResponse from unified_client.step() and return execution tuple.
 
@@ -512,13 +523,32 @@ class Persona:
         - Resolving location names to tile coordinates
         - Storing any thoughts in memory
         - Returning the execution tuple (next_tile, pronunciatio, description)
+
+        Args:
+            nearby_personas: List of (name, activity_key) tuples of personas actually nearby.
+                            Used to validate social targets.
         """
+        social = step_response.social
+
+        # Handle "continuing" flag - stay in place, keep doing what we're doing
+        if step_response.continuing:
+            # Store any thoughts from the response
+            self._store_thoughts(step_response.thoughts)
+
+            # Handle social even when continuing (might want to respond to someone)
+            self._process_continuing_social(social, nearby_personas, personas)
+
+            # Return current position with current action
+            curr_emoji = self.scratch.act_pronunciatio or "💭"
+            curr_desc = self.scratch.act_description or f"{self.name} is idle"
+            curr_address = self.scratch.act_address or ""
+            return (self.scratch.curr_tile, curr_emoji, f"{curr_desc} @ {curr_address}")
+
         # Handle parse errors - fall back to idle if we got nothing useful
         if not step_response.action:
             return self._create_idle_execution()
 
         action = step_response.action
-        social = step_response.social
 
         # Get current world for address construction
         tile_info = maze.access_tile(self.scratch.curr_tile)
@@ -529,35 +559,70 @@ class Persona:
             f"{curr_world}:{action.sector}:{action.arena}:{action.game_object}"
         )
 
+        # Validate social target is actually nearby
+        nearby_names = set()
+        if nearby_personas:
+            nearby_names = {name for name, _ in nearby_personas}
+
         # Process social decisions - build chat data if conversation is happening
         chatting_with = None
         chat = None
         chatting_with_buffer = None
         chatting_end_time = None
 
-        if social.wants_to_talk and social.target and social.conversation_line:
-            # Starting or continuing a conversation
-            chatting_with = social.target
+        # Check if LLM wants to end the conversation
+        if social.end_conversation and self.scratch.chatting_with:
+            cli.print_info(f"  {self.name} is ending conversation")
+            # Don't clear here - let reverie.py handle storage via _end_and_store_conversation
+            # Just signal by setting chatting_end_time to current time (immediate end)
+            chatting_end_time = self.scratch.curr_time
+            # Keep the existing chat and chatting_with for proper cleanup
+            chatting_with = self.scratch.chatting_with
+            chat = self.scratch.chat.copy() if self.scratch.chat else None
+            chatting_with_buffer = self.scratch.chatting_with_buffer
 
-            # Build chat list - either append to existing or start new
-            if self.scratch.chat:
-                chat = self.scratch.chat.copy()
+        # Only process social interaction if target is actually nearby
+        target_is_nearby = (
+            not social.target
+            or social.target in nearby_names
+            or self.scratch.chatting_with == social.target  # Already in conversation
+        )
+
+        if (
+            not social.end_conversation
+            and social.wants_to_talk
+            and social.target
+            and social.conversation_line
+        ):
+            if not target_is_nearby:
+                # Target isn't actually nearby - log and skip the conversation
+                cli.print_info(
+                    f"  {self.name} wanted to talk to {social.target} "
+                    f"but they're not nearby (ignoring)"
+                )
             else:
-                chat = []
+                # Starting or continuing a conversation
+                chatting_with = social.target
 
-            # Add our line to the conversation
-            chat.append([self.name, social.conversation_line])
+                # Build chat list - either append to existing or start new
+                if self.scratch.chat:
+                    chat = self.scratch.chat.copy()
+                else:
+                    chat = []
 
-            # Set chatting buffer (for vision tracking)
-            chatting_with_buffer = {social.target: self.scratch.vision_r}
+                # Add our line to the conversation
+                chat.append([self.name, social.conversation_line])
 
-            # Set conversation end time based on action duration
-            chatting_end_time = self.scratch.curr_time + datetime.timedelta(
-                minutes=action.duration_minutes
-            )
+                # Set chatting buffer (for vision tracking)
+                chatting_with_buffer = {social.target: self.scratch.vision_r}
 
-            # Print conversation to CLI
-            cli.print_conversation_line(self.name, social.conversation_line)
+                # Set conversation end time based on action duration
+                chatting_end_time = self.scratch.curr_time + datetime.timedelta(
+                    minutes=action.duration_minutes
+                )
+
+                # Print conversation to CLI
+                cli.print_conversation_line(self.name, social.conversation_line)
 
         elif social.conversation_line and not social.wants_to_talk:
             # Just saying something (no formal conversation)
@@ -606,6 +671,26 @@ class Persona:
             ret = self.scratch.planned_path[0]
             self.scratch.planned_path = self.scratch.planned_path[1:]
             return ret
+
+        # Check if we're already at the target location - stay in place
+        # This prevents unnecessary movement when doing the same activity
+        curr_tile_info = maze.access_tile(self.scratch.curr_tile)
+        curr_address_parts = [
+            curr_tile_info.get("world", ""),
+            curr_tile_info.get("sector", ""),
+            curr_tile_info.get("arena", ""),
+        ]
+        curr_arena_address = ":".join(curr_address_parts)
+
+        # Extract arena-level address from target (first 3 parts)
+        target_parts = act_address.split(":")
+        target_arena_address = (
+            ":".join(target_parts[:3]) if len(target_parts) >= 3 else act_address
+        )
+
+        if curr_arena_address == target_arena_address:
+            # Already at the target arena - stay in place
+            return self.scratch.curr_tile
 
         # Need to find a path to the target location
         path_finder = PathFinder(maze.collision_maze, collision_block_id)
@@ -702,6 +787,66 @@ class Persona:
                 thought.content,
                 None,
             )
+
+    def _process_continuing_social(self, social, nearby_personas, personas):
+        """
+        Process social decisions when persona is continuing their current activity.
+
+        This allows the persona to respond in conversation even while staying in place.
+        """
+        if not social:
+            return
+
+        # Check if LLM wants to end the conversation
+        if social.end_conversation and self.scratch.chatting_with:
+            cli.print_info(f"  {self.name} is ending conversation (while continuing)")
+            # Signal conversation end by setting chatting_end_time to now
+            self.scratch.chatting_end_time = self.scratch.curr_time
+            return
+
+        if not social.conversation_line:
+            return
+
+        # Validate social target is actually nearby
+        nearby_names = set()
+        if nearby_personas:
+            nearby_names = {name for name, _ in nearby_personas}
+
+        target_is_nearby = (
+            not social.target
+            or social.target in nearby_names
+            or self.scratch.chatting_with == social.target  # Already in conversation
+        )
+
+        if social.wants_to_talk and social.target and social.conversation_line:
+            if not target_is_nearby:
+                cli.print_info(
+                    f"  {self.name} wanted to talk to {social.target} "
+                    f"but they're not nearby (ignoring)"
+                )
+            else:
+                # Add line to existing conversation
+                if self.scratch.chat:
+                    self.scratch.chat.append([self.name, social.conversation_line])
+                else:
+                    self.scratch.chat = [[self.name, social.conversation_line]]
+
+                # Update chatting_with if starting new conversation
+                if not self.scratch.chatting_with:
+                    self.scratch.chatting_with = social.target
+                    self.scratch.chatting_with_buffer = {
+                        social.target: self.scratch.vision_r
+                    }
+
+                cli.print_conversation_line(self.name, social.conversation_line)
+
+        elif social.conversation_line and not social.wants_to_talk:
+            # Just saying something (no formal conversation)
+            if self.scratch.chat:
+                self.scratch.chat.append([self.name, social.conversation_line])
+            else:
+                self.scratch.chat = [[self.name, social.conversation_line]]
+            cli.print_conversation_line(self.name, social.conversation_line)
 
     def _create_idle_execution(self):
         """

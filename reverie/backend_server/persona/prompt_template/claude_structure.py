@@ -77,7 +77,7 @@ class SocialDecision:
     wants_to_talk: bool = False
     target: str | None = None
     conversation_line: str | None = None
-    continue_conversation: bool = False
+    end_conversation: bool = False  # Set to true to end the current conversation
 
 
 @dataclass
@@ -98,6 +98,7 @@ class StepResponse:
     schedule_update: list[tuple[str, int]] | None = None
     raw_json: dict[str, Any] = field(default_factory=dict)
     parse_errors: list[str] = field(default_factory=list)
+    continuing: bool = False  # True if LLM signals "no change" to current activity
 
 
 # ============================================================================
@@ -255,6 +256,7 @@ your decisions. The required format is:
 
 ```json
 {{
+  "continuing": false,
   "action": {{
     "description": "what you are doing",
     "duration_minutes": 30,
@@ -275,8 +277,22 @@ your decisions. The required format is:
 }}
 ```
 
-Required fields: action (with all subfields), social
-Optional fields: thoughts (list of {{"content": "...", "importance": 1-10}}), schedule_update
+=== CONTINUING YOUR CURRENT ACTIVITY ===
+If nothing significant has changed and you want to keep doing what you're already doing,
+set "continuing": true and OMIT the action field entirely. This saves processing and
+keeps you in place. Only provide action details when you're actually changing activities.
+
+Example of continuing:
+```json
+{{
+  "continuing": true,
+  "social": {{"wants_to_talk": false}},
+  "thoughts": []
+}}
+```
+
+Required fields: social
+Optional fields: continuing (default false), action (required if continuing is false), thoughts, schedule_update
 
 === CONVERSATIONS ===
 When interacting with someone nearby:
@@ -285,6 +301,13 @@ When interacting with someone nearby:
 - Set conversation_line: what you actually SAY to them (dialogue in quotes)
 Example: "conversation_line": "Hey Maria! How's your studying going?"
 The conversation_line is ACTUAL DIALOGUE that will be shown as a speech bubble.
+
+TO END A CONVERSATION: Set "end_conversation": true in your social response.
+End conversations when you've finished speaking - don't keep them "active" for several steps of silence.
+Natural endings include: you've said what you needed, the conversation feels complete, or there's
+a natural pause. If you're still hanging out together, a NEW conversation can start a few steps later
+if something new comes up to discuss. The point is to avoid having conversations marked "active" when
+nothing is being said. End it, and if you want to chat again later, start a fresh one.
 
 === REALITY RULES ===
 1. PHYSICAL: You can only interact with objects at your current location. To use something elsewhere, travel there first.
@@ -508,8 +531,8 @@ Someone is nearby! You may:
 === DECISION ===
 You are currently: {current_action}
 Time remaining: {int(remaining)} minutes
-Unless something important changed, you should CONTINUE your current activity.
-Only change if you have a compelling reason (someone to talk to, urgent need, etc.)."""
+Unless something important changed, use "continuing": true to keep doing what you're doing.
+Only set "continuing": false with a new action if you have a compelling reason to change."""
 
     return f"""TIME: {time_str}
 CURRENT LOCATION: {current_sector} > {current_arena}
@@ -723,11 +746,16 @@ def parse_step_response(
         result.parse_errors.append(f"Invalid JSON: {e}")
         return result
 
-    # Parse action
+    # Check for continuing flag first
+    result.continuing = data.get("continuing", False)
+
+    # Parse action (only required if not continuing)
     action_data = data.get("action", {})
-    if not action_data:
-        result.parse_errors.append("Missing 'action' field")
-    else:
+    if not action_data and not result.continuing:
+        result.parse_errors.append(
+            "Missing 'action' field (required when not continuing)"
+        )
+    elif action_data:
         location = action_data.get("location", {})
         sector = location.get("sector", "")
         arena = location.get("arena", "")
@@ -770,7 +798,7 @@ def parse_step_response(
         wants_to_talk=social_data.get("wants_to_talk", False),
         target=social_data.get("target"),
         conversation_line=social_data.get("conversation_line"),
-        continue_conversation=social_data.get("continue_conversation", False),
+        end_conversation=social_data.get("end_conversation", False),
     )
 
     # Parse thoughts

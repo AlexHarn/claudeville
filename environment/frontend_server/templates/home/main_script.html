@@ -673,6 +673,8 @@
 	let activeConvoId = null;
 	let lastConvoActivity = 0;  // For fade-out timer
 	let chatMinimized = false;
+	let displayedMessageKeys = new Set();  // Track which messages are already displayed
+	let previousConvoIds = [];  // Track previous conversation tabs for highlighting
 
 	function updateChatPopup(movements) {
 		const chatPopup = document.getElementById('chat-popup');
@@ -721,6 +723,9 @@
 			// Start fade timer if no activity
 			if (Date.now() - lastConvoActivity > 5000) {
 				chatPopup.classList.add('hidden');
+				// Clear displayed messages when chat hides (for fresh start next time)
+				displayedMessageKeys.clear();
+				previousConvoIds = [];
 			}
 			return;
 		}
@@ -774,58 +779,104 @@
 	function updateConversationTabs(convoIds) {
 		const chatTabs = document.getElementById('chat-tabs');
 		if (!chatTabs) return;
-		chatTabs.innerHTML = '';
 
-		for (const convoId of convoIds) {
-			const convo = conversations[convoId];
-			const tab = document.createElement('button');
-			tab.className = 'chat-tab' + (convoId === activeConvoId ? ' active' : '');
-			// Show initials of first two participants
-			const participantInitials = [...convo.participants].slice(0, 2).map(getInitials);
-			tab.textContent = participantInitials.join(' & ');
-			if (convo.participants.size > 2) {
-				tab.textContent += ` +${convo.participants.size - 2}`;
-			}
-			// Add tooltip with full names
-			tab.title = [...convo.participants].join(', ');
-			tab.onclick = () => {
-				activeConvoId = convoId;
-				// Pan camera to conversation location
-				if (mainCamera) {
-					mainCamera.pan(
-						convo.location.x * tile_width,
-						convo.location.y * tile_width,
-						500, 'Power2'
-					);
+		// Check for new conversations (not in previous list)
+		const newConvoIds = convoIds.filter(id => !previousConvoIds.includes(id));
+
+		// Only rebuild tabs if the list changed
+		const tabsChanged = convoIds.length !== previousConvoIds.length ||
+			convoIds.some((id, i) => id !== previousConvoIds[i]);
+
+		if (tabsChanged) {
+			chatTabs.innerHTML = '';
+
+			for (const convoId of convoIds) {
+				const convo = conversations[convoId];
+				const tab = document.createElement('button');
+				const isNew = newConvoIds.includes(convoId);
+				tab.className = 'chat-tab' + (convoId === activeConvoId ? ' active' : '') + (isNew ? ' new' : '');
+				tab.dataset.convoId = convoId;
+				// Show initials of first two participants
+				const participantInitials = [...convo.participants].slice(0, 2).map(getInitials);
+				tab.textContent = participantInitials.join(' & ');
+				if (convo.participants.size > 2) {
+					tab.textContent += ` +${convo.participants.size - 2}`;
 				}
-				updateConversationTabs(convoIds);
-				updateConversationMessages(convoId);
-			};
-			chatTabs.appendChild(tab);
+				// Add tooltip with full names
+				tab.title = [...convo.participants].join(', ');
+				tab.onclick = () => {
+					activeConvoId = convoId;
+					// Pan camera to conversation location
+					if (mainCamera) {
+						mainCamera.pan(
+							convo.location.x * tile_width,
+							convo.location.y * tile_width,
+							500, 'Power2'
+						);
+					}
+					updateConversationTabs(convoIds);
+					updateConversationMessages(convoId);
+				};
+				chatTabs.appendChild(tab);
+
+				// Remove 'new' highlight after animation
+				if (isNew) {
+					setTimeout(() => tab.classList.remove('new'), 1500);
+				}
+			}
+			previousConvoIds = [...convoIds];
+		} else {
+			// Just update active state without rebuilding
+			chatTabs.querySelectorAll('.chat-tab').forEach(tab => {
+				const isActive = tab.dataset.convoId === activeConvoId;
+				tab.classList.toggle('active', isActive);
+			});
 		}
 	}
 
-	function updateConversationMessages(convoId) {
+	function updateConversationMessages(convoId, forceRebuild = false) {
 		const chatMessages = document.getElementById('chat-messages');
 		if (!chatMessages) return;
 
 		const convo = conversations[convoId];
 		if (!convo) {
 			chatMessages.innerHTML = '<p class="chat-empty">No active conversation</p>';
+			displayedMessageKeys.clear();
 			return;
 		}
 
-		chatMessages.innerHTML = '';
-		for (const { speaker, line } of convo.lines) {
-			const bubble = document.createElement('div');
-			bubble.className = 'chat-bubble';
-			bubble.innerHTML = `
-				<span class="speaker">${speaker}</span>
-				<span class="message">${line}</span>
-			`;
-			chatMessages.appendChild(bubble);
+		// If conversation changed or forced rebuild, clear and rebuild
+		const currentConvoMarker = chatMessages.dataset.convoId;
+		if (currentConvoMarker !== convoId || forceRebuild) {
+			chatMessages.innerHTML = '';
+			chatMessages.dataset.convoId = convoId;
+			displayedMessageKeys.clear();
 		}
-		chatMessages.scrollTop = chatMessages.scrollHeight;
+
+		// Add only new messages (those not in displayedMessageKeys)
+		let addedNew = false;
+		for (const { speaker, line, key } of convo.lines) {
+			if (!displayedMessageKeys.has(key)) {
+				displayedMessageKeys.add(key);
+
+				const bubble = document.createElement('div');
+				bubble.className = 'chat-bubble new';
+				bubble.innerHTML = `
+					<span class="speaker">${speaker}</span>
+					<span class="message">${line}</span>
+				`;
+				chatMessages.appendChild(bubble);
+				addedNew = true;
+
+				// Remove 'new' highlight after animation
+				setTimeout(() => bubble.classList.remove('new'), 1500);
+			}
+		}
+
+		// Only scroll if new messages were added
+		if (addedNew) {
+			chatMessages.scrollTop = chatMessages.scrollHeight;
+		}
 	}
 
 	// Chat minimize button
