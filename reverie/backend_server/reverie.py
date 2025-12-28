@@ -471,6 +471,12 @@ class ReverieServer:
         # merge their chat lists so both have the full conversation.
         self._synchronize_conversations()
 
+        # Update movements with synchronized chat data
+        # This ensures frontend receives the complete merged conversation
+        for name, persona in self.personas.items():
+            if name in movements["persona"] and persona.scratch.chat:
+                movements["persona"][name]["chat"] = persona.scratch.chat
+
         # Add meta information (step is sent BEFORE increment so frontend knows what step this was)
         movements["meta"]["curr_time"] = self.curr_time.strftime("%B %d, %Y, %H:%M:%S")
         movements["meta"]["step"] = self.step  # Current step being processed
@@ -654,6 +660,28 @@ class ReverieServer:
                     self._end_and_store_conversation(persona)
                     # Clear the group reference
                     scratch.conversation_group_id = None
+
+        # Step 7: Clean up orphaned groups where no participants are actively chatting
+        for group_id, group in list(self.active_conversations.items()):
+            if group_id in ended_groups:
+                continue  # Already marked for deletion
+
+            # Check if ANY participant is still actively chatting
+            has_active_chatter = False
+            for participant in group.participants:
+                if participant in self.personas:
+                    scratch = self.personas[participant].scratch
+                    if scratch.chatting_with:
+                        has_active_chatter = True
+                        break
+
+            if not has_active_chatter:
+                # No one in this group is chatting anymore - clean it up
+                ended_groups.append(group_id)
+                # Clear group references from all participants
+                for participant in group.participants:
+                    if participant in self.personas:
+                        self.personas[participant].scratch.conversation_group_id = None
 
         # Clean up ended conversation groups
         for group_id in ended_groups:

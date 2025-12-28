@@ -42,6 +42,7 @@ if TYPE_CHECKING:
 MAX_CONTEXT_TOKENS = 200000  # Claude Opus context window
 COMPACTION_THRESHOLD = 0.80  # Trigger compaction at 80% fill
 COMPACTION_TOKEN_LIMIT = int(MAX_CONTEXT_TOKENS * COMPACTION_THRESHOLD)  # 160K tokens
+SLEEP_COMPACTION_MIN_TOKENS = 50000  # Don't compact on sleep if under 50K tokens
 
 # Debug verbosity (0=silent, 1=summary, 2=decisions, 3=full prompts)
 DEBUG_VERBOSITY = 1
@@ -289,7 +290,23 @@ The conversation_line is ACTUAL DIALOGUE that will be shown as a speech bubble.
 1. PHYSICAL: You can only interact with objects at your current location. To use something elsewhere, travel there first.
 2. TEMPORAL: Actions take realistic time. A shower is 5-10 minutes, not 30. Breakfast is 15-20 minutes. Adjust duration_minutes accordingly.
 3. CONTINUITY: If you're in the middle of something and nothing has changed, continue it. Don't jump between activities erratically.
-4. CONSISTENCY: Your schedule is a guide, not a script. Adapt naturally to what's happening around you.
+4. SCHEDULE AS GUIDE: Your schedule is a rough plan, not a script. Adapt based on what's actually happening.
+
+=== CRITICAL: STAY GROUNDED IN REALITY ===
+DO NOT roleplay or pretend things are happening when they're not. You must base your actions on ACTUAL observations:
+
+- If you planned to "attend class" but NO professor or students are around, you can't attend class. You might wait briefly, then find something else to do.
+- If you work at a cafe and NO customers have come in, acknowledge it's slow. Don't pretend you're "finishing up the morning rush" - be honest that it's quiet.
+- If you have a meeting scheduled for 4pm but it's only 1pm, DON'T go there early and wait for 3 hours. Find something productive to do until closer to the time.
+- If you try to talk to someone and they don't respond after a reasonable wait, they may be busy or uninterested. React naturally - you might feel awkward, try once more, or give up.
+
+Your inner thoughts should reflect ACTUAL reality, not what you expected/hoped would happen.
+
+BAD: "The morning rush is finally slowing down" (when no customers came)
+GOOD: "It's been really quiet this morning. I wonder where everyone is."
+
+BAD: Walking to a 4pm meeting at 1pm
+GOOD: "The meeting isn't until 4pm. I have a few hours - maybe I'll read or take a walk first."
 
 === EVENT TRIPLE FORMAT ===
 The "event" field describes your action as [subject, verb, object]:
@@ -377,11 +394,29 @@ def build_step_prompt(
         convo_lines = "\n".join(
             f"{speaker}: {line}" for speaker, line in conversation_context
         )
+        # Count unique speakers and check if we spoke last
+        speakers = set(spk for spk, _ in conversation_context)
+        last_speaker = conversation_context[-1][0] if conversation_context else None
+        is_group = len(speakers) > 2
+
+        if is_group:
+            # Group conversation - note the state, let persona decide
+            if last_speaker == scratch.name:
+                turn_hint = "(You spoke last. The others haven't responded yet.)"
+            else:
+                turn_hint = f"({last_speaker} just spoke.)"
+        else:
+            # Two-person conversation - note whose turn, but persona decides how to react
+            if last_speaker == scratch.name:
+                turn_hint = "(You spoke last. Waiting for their response - or they may be ignoring you.)"
+            else:
+                turn_hint = "(They just spoke. You can respond, stay silent, or end the conversation.)"
+
         convo_section = f"""
 === ACTIVE CONVERSATION ===
 {convo_lines}
 
-(It's your turn to respond. Set continue_conversation to false to end.)
+{turn_hint}
 """
         # Add positioning guidance for active conversation
         positioning_guidance = """
@@ -420,7 +455,45 @@ You can hear this conversation. If socially appropriate, you may join by:
 
     # Build decision guidance based on context
     decision_guidance = ""
-    if nearby_personas:
+
+    # Check if current activity typically requires others but nobody is around
+    social_activity_keywords = [
+        "class",
+        "lecture",
+        "seminar",
+        "meeting",
+        "workshop",
+        "lesson",
+        "discussion",
+        "group",
+        "attend",
+        "session",
+        "tutorial",
+    ]
+    service_activity_keywords = ["serving", "customers", "helping", "rush", "orders"]
+    action_lower = current_action.lower() if current_action else ""
+
+    is_social_activity = any(kw in action_lower for kw in social_activity_keywords)
+    is_service_activity = any(kw in action_lower for kw in service_activity_keywords)
+
+    if not nearby_personas and (is_social_activity or is_service_activity):
+        # Nobody's here but the activity usually involves people
+        if is_social_activity:
+            decision_guidance = """
+=== REALITY CHECK ===
+You're at a location for a social activity, but NO ONE ELSE is here.
+- No professor, no students, no instructor - the room is empty
+- This is unusual. React naturally: wait briefly, check the time, feel confused
+- Consider: Is class cancelled? Am I early? Wrong room? Should I leave?
+- Your thoughts should reflect this unexpected situation"""
+        else:
+            decision_guidance = """
+=== REALITY CHECK ===
+You're working but there are NO CUSTOMERS or people around.
+- It's quiet. Acknowledge the reality - don't pretend it's busy
+- Your thoughts should reflect the actual slow/quiet situation
+- Consider: organizing, cleaning, taking a break, reading, etc."""
+    elif nearby_personas:
         decision_guidance = """
 === DECISION ===
 Someone is nearby! You may:
@@ -855,9 +928,28 @@ Write this as your internal thoughts, not a list."""
         This is called automatically when a persona starts sleeping,
         allowing the session to summarize the day's events before
         the persona wakes up with refreshed context.
+
+        Skips compaction if under SLEEP_COMPACTION_MIN_TOKENS (50K) to avoid
+        wasteful compaction right after initialization.
         """
+        tokens = _persona_usage.get(self.persona_name, {}).get("context_tokens", 0)
+
+        # Skip compaction if under minimum threshold (e.g., just initialized)
+        if tokens < SLEEP_COMPACTION_MIN_TOKENS:
+            if DEBUG_VERBOSITY >= 1:
+                print(
+                    cli.c("  🌙 ", cli.Colors.BRIGHT_BLUE)
+                    + cli.c(
+                        self.persona_name, self._get_persona_color(), cli.Colors.BOLD
+                    )
+                    + cli.c(
+                        f" sleeping - skipping compact ({tokens:,} < {SLEEP_COMPACTION_MIN_TOKENS:,} min)",
+                        cli.Colors.DIM,
+                    )
+                )
+            return
+
         if DEBUG_VERBOSITY >= 1:
-            tokens = _persona_usage.get(self.persona_name, {}).get("context_tokens", 0)
             print(
                 cli.c("  🌙 ", cli.Colors.BRIGHT_BLUE)
                 + cli.c(self.persona_name, self._get_persona_color(), cli.Colors.BOLD)

@@ -541,7 +541,9 @@ html, body {
 
 .chat-popup.minimized .chat-header {
   border-bottom: none;
-  padding: 10px 16px;
+  padding: 0 16px;
+  height: 44px;
+  min-height: 44px;
 }
 
 .chat-popup.minimized .chat-messages {
