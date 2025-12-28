@@ -240,20 +240,9 @@
 
 				let curr_persona_name_os = curr_persona_name.replace(/ /g, "_");
 				let description_content = execute_movement["persona"][curr_persona_name]["description"];
-				let chat_content = "";
-
-				if (execute_movement["persona"][curr_persona_name]["chat"] != null) {
-					for (let j = 0; j < execute_movement["persona"][curr_persona_name]["chat"].length; j++) {
-						chat_content += execute_movement["persona"][curr_persona_name]["chat"][j][0] + ": " +
-						                execute_movement["persona"][curr_persona_name]["chat"][j][1] + "<br>";
-					}
-				} else {
-					chat_content = "<em>None</em>";
-				}
 
 				document.getElementById("current_action__" + curr_persona_name_os).innerHTML = description_content.split("@")[0];
 				document.getElementById("target_address__" + curr_persona_name_os).innerHTML = description_content.split("@")[1];
-				document.getElementById("chat__" + curr_persona_name_os).innerHTML = chat_content;
 			}
 
 			if (curr_persona.body.x < movement_target[curr_persona_name][0]) {
@@ -569,6 +558,9 @@
 	        displayedStep++;
 	        queuedMovements = Math.max(0, queuedMovements - 1);
 
+	        // Update chat popup with conversation data
+	        updateChatPopup(result.movement);
+
 	        // During skip mode, check if this movement had an LLM action
 	        if (isSkipping && result.hadNewAction) {
 	          handleSkipActionFound(result.movement);
@@ -671,6 +663,187 @@
 
 	// Initialize button states
 	updateButtonStates();
+
+	// ==========================================================================
+	// Chat Popup System
+	// ==========================================================================
+
+	// Track conversations by group
+	let conversations = {};  // {convoId: {participants: Set, lines: [], location: {x, y}}}
+	let activeConvoId = null;
+	let lastConvoActivity = 0;  // For fade-out timer
+	let chatMinimized = false;
+
+	function updateChatPopup(movements) {
+		const chatPopup = document.getElementById('chat-popup');
+		if (!chatPopup || !movements || !movements.persona) return;
+
+		// Collect all unique chat lines from all personas
+		// Key is "speaker:line", value is {speaker, line, location}
+		let allLines = new Map();
+		let allParticipants = new Set();
+
+		for (const [name, data] of Object.entries(movements.persona)) {
+			if (data.chat && data.chat.length > 0) {
+				for (const [speaker, line] of data.chat) {
+					const key = `${speaker}:${line}`;
+					if (!allLines.has(key)) {
+						allLines.set(key, {
+							speaker,
+							line,
+							key,
+							location: { x: data.movement[0], y: data.movement[1] }
+						});
+					}
+					allParticipants.add(speaker);
+				}
+			}
+		}
+
+		// If we have any chat lines, create a single conversation group
+		// (In the future, we could split by location if personas are far apart)
+		let activeConvos = {};
+		if (allLines.size > 0) {
+			const convoId = [...allParticipants].sort().join('_');
+			const firstLine = allLines.values().next().value;
+			activeConvos[convoId] = {
+				participants: allParticipants,
+				lines: [...allLines.values()],
+				location: firstLine.location
+			};
+		}
+
+		// Update stored conversations
+		conversations = activeConvos;
+		const convoIds = Object.keys(conversations);
+
+		if (convoIds.length === 0) {
+			// Start fade timer if no activity
+			if (Date.now() - lastConvoActivity > 5000) {
+				chatPopup.classList.add('hidden');
+			}
+			return;
+		}
+
+		lastConvoActivity = Date.now();
+		chatPopup.classList.remove('hidden');
+
+		// Auto-select closest conversation to camera if none selected or current is gone
+		if (!activeConvoId || !conversations[activeConvoId]) {
+			activeConvoId = findClosestConversation();
+		}
+
+		// Update tabs
+		updateConversationTabs(convoIds);
+
+		// Update messages for active conversation (if not minimized)
+		if (!chatMinimized) {
+			updateConversationMessages(activeConvoId);
+		}
+	}
+
+	function findClosestConversation() {
+		if (!mainCamera) return Object.keys(conversations)[0] || null;
+
+		// Get camera center position
+		const camX = mainCamera.scrollX + mainCamera.width / 2;
+		const camY = mainCamera.scrollY + mainCamera.height / 2;
+
+		let closest = null;
+		let minDist = Infinity;
+
+		for (const [convoId, convo] of Object.entries(conversations)) {
+			const dx = convo.location.x * tile_width - camX;
+			const dy = convo.location.y * tile_width - camY;
+			const dist = dx * dx + dy * dy;
+			if (dist < minDist) {
+				minDist = dist;
+				closest = convoId;
+			}
+		}
+		return closest;
+	}
+
+	function getInitials(name) {
+		// Extract initials from a name (e.g., "Maria Lopez" -> "ML")
+		const rgx = new RegExp(/(\p{L}{1})\p{L}+/, 'gu');
+		const matches = [...name.matchAll(rgx)] || [];
+		return ((matches.shift()?.[1] || '') + (matches.pop()?.[1] || '')).toUpperCase();
+	}
+
+	function updateConversationTabs(convoIds) {
+		const chatTabs = document.getElementById('chat-tabs');
+		if (!chatTabs) return;
+		chatTabs.innerHTML = '';
+
+		for (const convoId of convoIds) {
+			const convo = conversations[convoId];
+			const tab = document.createElement('button');
+			tab.className = 'chat-tab' + (convoId === activeConvoId ? ' active' : '');
+			// Show initials of first two participants
+			const participantInitials = [...convo.participants].slice(0, 2).map(getInitials);
+			tab.textContent = participantInitials.join(' & ');
+			if (convo.participants.size > 2) {
+				tab.textContent += ` +${convo.participants.size - 2}`;
+			}
+			// Add tooltip with full names
+			tab.title = [...convo.participants].join(', ');
+			tab.onclick = () => {
+				activeConvoId = convoId;
+				// Pan camera to conversation location
+				if (mainCamera) {
+					mainCamera.pan(
+						convo.location.x * tile_width,
+						convo.location.y * tile_width,
+						500, 'Power2'
+					);
+				}
+				updateConversationTabs(convoIds);
+				updateConversationMessages(convoId);
+			};
+			chatTabs.appendChild(tab);
+		}
+	}
+
+	function updateConversationMessages(convoId) {
+		const chatMessages = document.getElementById('chat-messages');
+		if (!chatMessages) return;
+
+		const convo = conversations[convoId];
+		if (!convo) {
+			chatMessages.innerHTML = '<p class="chat-empty">No active conversation</p>';
+			return;
+		}
+
+		chatMessages.innerHTML = '';
+		for (const { speaker, line } of convo.lines) {
+			const bubble = document.createElement('div');
+			bubble.className = 'chat-bubble';
+			bubble.innerHTML = `
+				<span class="speaker">${speaker}</span>
+				<span class="message">${line}</span>
+			`;
+			chatMessages.appendChild(bubble);
+		}
+		chatMessages.scrollTop = chatMessages.scrollHeight;
+	}
+
+	// Chat minimize button
+	document.getElementById('chat-minimize').addEventListener('click', function() {
+		const chatPopup = document.getElementById('chat-popup');
+		chatMinimized = !chatMinimized;
+		if (chatMinimized) {
+			chatPopup.classList.add('minimized');
+			this.textContent = '+';
+		} else {
+			chatPopup.classList.remove('minimized');
+			this.textContent = '−';
+			// Refresh messages when expanding
+			if (activeConvoId) {
+				updateConversationMessages(activeConvoId);
+			}
+		}
+	});
 
 	// ==========================================================================
 	// Menu System (ESC key)

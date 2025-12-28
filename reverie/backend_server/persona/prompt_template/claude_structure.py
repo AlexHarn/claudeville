@@ -308,6 +308,7 @@ def build_step_prompt(
     nearby_personas: list[tuple[str, str]],  # [(name, activity), ...]
     accessible_locations: dict[str, Any],  # {sector: {arena: [objects]}}
     conversation_context: list[tuple[str, str]] | None = None,  # [(speaker, line), ...]
+    nearby_conversations: list[dict] | None = None,  # [{participants, chat, group_id}]
 ) -> str:
     """
     Build a step prompt with minimal world updates.
@@ -371,6 +372,7 @@ def build_step_prompt(
 
     # Conversation context if active
     convo_section = ""
+    positioning_guidance = ""
     if conversation_context:
         convo_lines = "\n".join(
             f"{speaker}: {line}" for speaker, line in conversation_context
@@ -380,6 +382,40 @@ def build_step_prompt(
 {convo_lines}
 
 (It's your turn to respond. Set continue_conversation to false to end.)
+"""
+        # Add positioning guidance for active conversation
+        positioning_guidance = """
+=== CONVERSATION POSITIONING ===
+You are in an active conversation. Consider your physical positioning:
+- For casual chat: stay stationary, face your conversation partner(s)
+- For intimate/important topics: move closer (1-2 tiles) if too far
+- For greetings from afar: you may speak first, then approach
+- For lectures/presentations: speaker may pace, listeners stay seated
+- Stay in place while talking - don't walk away mid-conversation!
+
+Your location should generally stay the same during conversation unless moving closer.
+"""
+
+    # Nearby conversations they could join
+    nearby_convo_section = ""
+    if nearby_conversations and not conversation_context:
+        # Only show if not already in a conversation
+        convo_strs = []
+        for conv in nearby_conversations[:2]:  # Limit to 2 conversations
+            participants = ", ".join(conv.get("participants", []))
+            chat_preview = conv.get("chat", [])[-3:]  # Last 3 lines
+            chat_lines = "\n    ".join(f"{s}: {line}" for s, line in chat_preview)
+            convo_strs.append(f"  {participants}:\n    {chat_lines}")
+
+        if convo_strs:
+            nearby_convo_section = f"""
+=== NEARBY CONVERSATION ===
+{chr(10).join(convo_strs)}
+
+You can hear this conversation. If socially appropriate, you may join by:
+- Setting wants_to_talk: true and target to one of the participants
+- Adding a natural entry line that acknowledges the ongoing discussion
+- Or continue your current activity if joining wouldn't be appropriate
 """
 
     # Build decision guidance based on context
@@ -417,7 +453,7 @@ CURRENT ACTIVITY: {current_action}{action_context}
 
 === YOUR SCHEDULE FOR TODAY ===
 {schedule_str}
-{convo_section}{decision_guidance}
+{convo_section}{nearby_convo_section}{positioning_guidance}{decision_guidance}
 
 === REALITY CONSTRAINTS ===
 PHYSICAL:
@@ -812,7 +848,25 @@ Write this as your internal thoughts, not a list."""
                     + cli.c(" session initialized", cli.Colors.DIM)
                 )
 
-    async def step_async(
+    async def compact_for_sleep(self):
+        """
+        Trigger compaction when persona goes to sleep.
+
+        This is called automatically when a persona starts sleeping,
+        allowing the session to summarize the day's events before
+        the persona wakes up with refreshed context.
+        """
+        if DEBUG_VERBOSITY >= 1:
+            tokens = _persona_usage.get(self.persona_name, {}).get("context_tokens", 0)
+            print(
+                cli.c("  🌙 ", cli.Colors.BRIGHT_BLUE)
+                + cli.c(self.persona_name, self._get_persona_color(), cli.Colors.BOLD)
+                + cli.c(f" sleeping - compacting at {tokens:,} tokens", cli.Colors.DIM)
+            )
+
+        await self._trigger_compaction()
+
+    async def step(
         self,
         perceptions: list[str],
         nearby_personas: list[tuple[str, str]],
@@ -821,6 +875,7 @@ Write this as your internal thoughts, not a list."""
         valid_arenas: dict[str, list[str]],
         valid_objects: dict[str, dict[str, list[str]]],
         conversation_context: list[tuple[str, str]] | None = None,
+        nearby_conversations: list[dict] | None = None,
     ) -> StepResponse:
         """
         Execute a single simulation step for this persona.
@@ -836,6 +891,7 @@ Write this as your internal thoughts, not a list."""
             nearby_personas,
             accessible_locations,
             conversation_context,
+            nearby_conversations,
         )
 
         # Send and parse
@@ -865,30 +921,7 @@ Write this as your internal thoughts, not a list."""
 
         return result
 
-    def step(
-        self,
-        perceptions: list[str],
-        nearby_personas: list[tuple[str, str]],
-        accessible_locations: dict[str, Any],
-        valid_sectors: list[str],
-        valid_arenas: dict[str, list[str]],
-        valid_objects: dict[str, dict[str, list[str]]],
-        conversation_context: list[tuple[str, str]] | None = None,
-    ) -> StepResponse:
-        """Sync wrapper for step_async."""
-        return _run_async(
-            self.step_async(
-                perceptions,
-                nearby_personas,
-                accessible_locations,
-                valid_sectors,
-                valid_arenas,
-                valid_objects,
-                conversation_context,
-            )
-        )
-
-    async def plan_day_async(self, date_str: str) -> DayPlanResponse:
+    async def plan_day(self, date_str: str) -> DayPlanResponse:
         """
         Generate a personalized daily schedule for the persona.
 
@@ -911,10 +944,6 @@ Write this as your internal thoughts, not a list."""
         self._print_day_plan_result(result)
 
         return result
-
-    def plan_day(self, date_str: str) -> DayPlanResponse:
-        """Sync wrapper for plan_day_async."""
-        return _run_async(self.plan_day_async(date_str))
 
     def _print_day_plan_result(self, result: DayPlanResponse):
         """Print day planning result using CLI colors."""
@@ -1344,6 +1373,24 @@ def _get_recent_memories(persona: Persona, limit: int = 15) -> str:
     if not hasattr(persona, "a_mem"):
         return ""
 
+    lines = []
+
+    # Get recent conversations with full content
+    if hasattr(persona.a_mem, "seq_chat") and persona.a_mem.seq_chat:
+        recent_chats = persona.a_mem.seq_chat[-5:]  # Last 5 conversations
+        for node in recent_chats:
+            created = getattr(node, "created", None)
+            time_str = created.strftime("%B %d, %H:%M") if created else ""
+
+            # Get conversation content from filling
+            filling = getattr(node, "filling", None)
+            if filling and isinstance(filling, list) and len(filling) > 0:
+                partner = getattr(node, "object", "someone")
+                lines.append(f"- [{time_str}] Conversation with {partner}:")
+                for speaker, line in filling[-6:]:  # Last 6 lines of each convo
+                    lines.append(f'    {speaker}: "{line}"')
+
+    # Get recent events and thoughts
     nodes = []
     if hasattr(persona.a_mem, "seq_event"):
         nodes.extend(persona.a_mem.seq_event[-50:])
@@ -1355,10 +1402,6 @@ def _get_recent_memories(persona: Persona, limit: int = 15) -> str:
     nodes.sort(key=lambda n: n.poignancy, reverse=True)
     nodes = nodes[:limit]
 
-    if not nodes:
-        return ""
-
-    lines = []
     for node in nodes:
         desc = node.description
         created = getattr(node, "created", None)
@@ -1368,7 +1411,7 @@ def _get_recent_memories(persona: Persona, limit: int = 15) -> str:
         else:
             lines.append(f"- {desc}")
 
-    return "\n".join(lines)
+    return "\n".join(lines) if lines else ""
 
 
 def _format_remaining_schedule(scratch) -> str:

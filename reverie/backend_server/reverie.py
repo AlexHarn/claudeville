@@ -15,6 +15,8 @@ import shutil
 import threading
 import time
 import traceback
+import uuid
+from dataclasses import dataclass, field
 
 from flask import Flask, jsonify, request
 
@@ -30,6 +32,55 @@ from utils import (
 )
 
 from persona.persona import Persona
+
+
+##############################################################################
+#                           CONVERSATION GROUPS                              #
+##############################################################################
+
+
+@dataclass
+class ConversationGroup:
+    """
+    Represents an active multi-party conversation.
+
+    Managed centrally by ReverieServer to enable 3+ persona conversations.
+    """
+
+    id: str = field(default_factory=lambda: str(uuid.uuid4())[:8])
+    participants: set = field(default_factory=set)
+    chat: list = field(default_factory=list)  # [(speaker, line), ...]
+    location_tile: tuple = (0, 0)  # Anchor location (first participant's tile)
+    started_at: datetime.datetime = None
+    end_time: datetime.datetime = None
+
+    def add_participant(self, name: str) -> bool:
+        """Add a participant to the conversation. Returns True if newly added."""
+        if name in self.participants:
+            return False
+        self.participants.add(name)
+        return True
+
+    def add_line(self, speaker: str, line: str) -> bool:
+        """Add a chat line. Returns True if added (not duplicate)."""
+        entry = (speaker, line)
+        if entry not in [(spk, txt) for spk, txt in self.chat]:
+            self.chat.append(entry)
+            return True
+        return False
+
+    def merge_lines(self, lines: list) -> int:
+        """Merge lines from another source. Returns count of new lines added."""
+        added = 0
+        for speaker, line in lines:
+            if self.add_line(speaker, line):
+                added += 1
+        return added
+
+    def get_participants_str(self) -> str:
+        """Get participant names as comma-separated string."""
+        return ", ".join(sorted(self.participants))
+
 
 # Backend HTTP server port
 BACKEND_PORT = 5000
@@ -200,6 +251,10 @@ class ReverieServer:
         self._pending_movements = []
         self._movements_lock = threading.Lock()
 
+        # Active conversation groups for multi-party conversations
+        # Maps group_id -> ConversationGroup
+        self.active_conversations: dict[str, ConversationGroup] = {}
+
     def _setup_flask_routes(self):
         """Set up Flask HTTP endpoints for frontend communication."""
 
@@ -366,7 +421,7 @@ class ReverieServer:
                 pronunciatio,
                 description,
                 had_llm_call,
-            ) = await persona.move_async(
+            ) = await persona.move(
                 self.maze,
                 self.personas,
                 self.personas_tile[name],
@@ -410,6 +465,12 @@ class ReverieServer:
                 any_llm_call = True
                 active_personas.append(name)
 
+        # CONVERSATION SYNCHRONIZATION
+        # After all personas have moved in parallel, synchronize their chats.
+        # If Klaus is chatting with Maria and Maria is chatting with Klaus,
+        # merge their chat lists so both have the full conversation.
+        self._synchronize_conversations()
+
         # Add meta information (step is sent BEFORE increment so frontend knows what step this was)
         movements["meta"]["curr_time"] = self.curr_time.strftime("%B %d, %Y, %H:%M:%S")
         movements["meta"]["step"] = self.step  # Current step being processed
@@ -433,6 +494,219 @@ class ReverieServer:
             self._pending_movements.append(movements)
 
         return movements
+
+    def _synchronize_conversations(self):
+        """
+        Synchronize chat histories between personas who are in conversation.
+
+        After all personas have moved in parallel, this method:
+        1. Manages ConversationGroup objects for multi-party conversations
+        2. Detects conversations and groups participants together
+        3. Merges chat lines so all participants see the full conversation
+        4. Allows nearby personas to join ongoing conversations
+        5. Stores completed conversations in all participants' memories
+
+        This is critical because personas run in parallel and don't see each
+        other's dialogue responses within a single simulation step.
+        """
+        # Step 1: Build mapping of persona -> existing group from scratch
+        # This ensures we reuse existing groups instead of creating new ones
+        persona_to_group: dict[str, str] = {}
+        for name, persona in self.personas.items():
+            group_id = persona.scratch.conversation_group_id
+            if group_id and group_id in self.active_conversations:
+                persona_to_group[name] = group_id
+
+        # Step 2: Collect all active conversationalists and their chat lines
+        active_chatters = {}  # {name: (partner, chat_lines)}
+        for name, persona in self.personas.items():
+            if persona.scratch.chatting_with and persona.scratch.chat:
+                active_chatters[name] = (
+                    persona.scratch.chatting_with,
+                    persona.scratch.chat or [],
+                )
+
+        # Step 3: Find or create conversation groups
+        for name, (partner, chat_lines) in active_chatters.items():
+            group = None
+            group_id = None
+
+            # Check if this persona is already in a group
+            if name in persona_to_group:
+                group_id = persona_to_group[name]
+                group = self.active_conversations.get(group_id)
+
+            # Check if partner is already in a group we should join
+            if not group and partner in persona_to_group:
+                group_id = persona_to_group[partner]
+                group = self.active_conversations.get(group_id)
+                if group:
+                    group.add_participant(name)
+                    persona_to_group[name] = group_id
+                    # Update persona's group reference
+                    self.personas[name].scratch.conversation_group_id = group_id
+
+            # Create new group if neither is in one
+            if not group:
+                group = ConversationGroup(
+                    participants={name},
+                    location_tile=self.personas_tile.get(name, (0, 0)),
+                    started_at=self.curr_time,
+                )
+                self.active_conversations[group.id] = group
+                persona_to_group[name] = group.id
+                group_id = group.id
+                # Update persona's group reference
+                self.personas[name].scratch.conversation_group_id = group_id
+
+            # Add partner to group if valid persona
+            if partner in self.personas and partner not in group.participants:
+                group.add_participant(partner)
+                persona_to_group[partner] = group_id
+                # Update partner's group reference
+                self.personas[partner].scratch.conversation_group_id = group_id
+
+            # Merge this persona's chat lines into the group
+            group.merge_lines(chat_lines)
+
+        # Step 4: Synchronize all group members' chat lists
+        for group_id, group in list(self.active_conversations.items()):
+            if len(group.participants) < 2:
+                continue
+
+            # Get the full merged chat from the group
+            full_chat = group.chat
+
+            # Update each participant's scratch with the full conversation
+            for participant_name in group.participants:
+                if participant_name not in self.personas:
+                    continue
+
+                persona = self.personas[participant_name]
+                persona.scratch.merge_chat_lines(full_chat)
+                # Ensure group reference is set
+                persona.scratch.conversation_group_id = group_id
+
+                # If they weren't in a conversation, set them up
+                if not persona.scratch.chatting_with:
+                    # Pick any other participant as their "chatting_with"
+                    others = [p for p in group.participants if p != participant_name]
+                    if others:
+                        persona.scratch.chatting_with = others[0]
+                        persona.scratch.chat = list(full_chat)
+                        persona.scratch.chatting_with_buffer = {
+                            p: persona.scratch.vision_r for p in others
+                        }
+                        if group.end_time:
+                            persona.scratch.chatting_end_time = group.end_time
+                        else:
+                            persona.scratch.chatting_end_time = (
+                                self.curr_time + datetime.timedelta(minutes=5)
+                            )
+
+            # Debug output
+            cli.print_info(
+                f"  Conversation group [{group.id}]: "
+                f"{group.get_participants_str()} ({len(group.chat)} lines)"
+            )
+
+        # Step 4: Handle one-sided conversations (A talks to B, B hasn't responded)
+        for name, (partner, chat_lines) in active_chatters.items():
+            if partner not in self.personas:
+                continue
+
+            persona_b = self.personas[partner]
+
+            # If B isn't chatting yet, set them up to respond
+            if not persona_b.scratch.chatting_with and chat_lines:
+                persona_b.scratch.chatting_with = name
+                persona_b.scratch.chat = []
+                persona_b.scratch.merge_chat_lines(chat_lines)
+                persona_b.scratch.chatting_with_buffer = {
+                    name: persona_b.scratch.vision_r
+                }
+
+                persona_a = self.personas[name]
+                if persona_a.scratch.chatting_end_time:
+                    persona_b.scratch.chatting_end_time = (
+                        persona_a.scratch.chatting_end_time
+                    )
+                else:
+                    persona_b.scratch.chatting_end_time = (
+                        self.curr_time + datetime.timedelta(minutes=5)
+                    )
+
+                cli.print_info(
+                    f"  Initiated conversation: {name} -> {partner} "
+                    f"({len(chat_lines)} lines shared)"
+                )
+
+        # Step 6: Check for conversations that have ended
+        ended_groups = []
+        for name, persona in self.personas.items():
+            scratch = persona.scratch
+            if scratch.chatting_end_time and scratch.curr_time:
+                if scratch.curr_time >= scratch.chatting_end_time:
+                    # Find and mark the group as ended
+                    group_id = scratch.conversation_group_id
+                    if group_id and group_id not in ended_groups:
+                        ended_groups.append(group_id)
+                    self._end_and_store_conversation(persona)
+                    # Clear the group reference
+                    scratch.conversation_group_id = None
+
+        # Clean up ended conversation groups
+        for group_id in ended_groups:
+            if group_id in self.active_conversations:
+                del self.active_conversations[group_id]
+
+    def _end_and_store_conversation(self, persona):
+        """
+        End a conversation and store it in the persona's associative memory.
+
+        Called when chatting_end_time has been reached.
+        """
+        partner, chat_lines = persona.scratch.end_conversation()
+        if not partner or not chat_lines:
+            return
+
+        # Build a description of the conversation
+        num_lines = len(chat_lines)
+        description = f"Conversation with {partner} ({num_lines} exchanges)"
+
+        # Create keywords from the conversation
+        keywords = set([partner.lower(), "conversation", "chat"])
+        for speaker, line in chat_lines:
+            # Add speaker names as keywords
+            keywords.add(speaker.lower())
+            # Add key words from the conversation (simplified)
+            words = line.lower().split()[:5]
+            keywords.update(w for w in words if len(w) > 3)
+
+        # Store in associative memory
+        created = persona.scratch.curr_time
+        expiration = created + datetime.timedelta(days=30)
+        s = persona.scratch.name
+        p = "chat with"
+        o = partner
+
+        # Calculate poignancy based on conversation length
+        poignancy = min(5 + num_lines, 10)
+
+        persona.a_mem.add_chat(
+            created=created,
+            expiration=expiration,
+            s=s,
+            p=p,
+            o=o,
+            description=description,
+            keywords=keywords,
+            poignancy=poignancy,
+            embedding_key=description,
+            filling=chat_lines,
+        )
+
+        cli.print_info(f"  Stored conversation: {s} <-> {partner} ({num_lines} lines)")
 
     def start_http_server(self):
         """Start the Flask HTTP server in a background thread."""

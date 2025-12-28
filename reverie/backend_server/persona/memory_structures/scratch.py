@@ -131,15 +131,21 @@ class Scratch:
 
         # <chatting_with> is the string name of the persona that the current
         # persona is chatting with. None if it does not exist.
+        # NOTE: For multi-party conversations, this holds the "primary" partner
+        # but the actual group is tracked via conversation_group_id.
         self.chatting_with = None
-        # <chat> is a list of list that saves a conversation between two personas.
+        # <chat> is a list of list that saves a conversation between two+ personas.
         # It comes in the form of: [["Dolores Murphy", "Hi"],
         #                           ["Maeve Jenson", "Hi"] ...]
+        # For group conversations, multiple speakers may appear.
         self.chat = None
-        # <chatting_with_buffer>
-        # e.g., ["Dolores Murphy"] = self.vision_r
+        # <chatting_with_buffer> maps partner names to vision radius
+        # e.g., {"Dolores Murphy": 4, "Jane Doe": 4}
         self.chatting_with_buffer = dict()
         self.chatting_end_time = None
+        # <conversation_group_id> references the ConversationGroup in reverie.py
+        # for multi-party conversations (3+ personas)
+        self.conversation_group_id = None
 
         # <path_set> is True if we've already calculated the path the persona will
         # take to execute this action. That path is stored in the persona's
@@ -220,6 +226,7 @@ class Scratch:
                 )
             else:
                 self.chatting_end_time = None
+            self.conversation_group_id = scratch_load.get("conversation_group_id")
 
             self.act_path_set = scratch_load["act_path_set"]
             self.planned_path = scratch_load["planned_path"]
@@ -286,6 +293,7 @@ class Scratch:
             )
         else:
             scratch["chatting_end_time"] = None
+        scratch["conversation_group_id"] = self.conversation_group_id
 
         scratch["act_path_set"] = self.act_path_set
         scratch["planned_path"] = self.planned_path
@@ -582,3 +590,88 @@ class Scratch:
             minute = curr_min_sum % 60
             ret += f"{hour:02}:{minute:02} || {row[0]}\n"
         return ret
+
+    def merge_chat_lines(self, incoming_lines):
+        """
+        Merge incoming chat lines into the current chat, avoiding duplicates.
+
+        This is used to synchronize conversations between two personas who are
+        chatting with each other. When personas run in parallel, each generates
+        their own dialogue line. This method merges the other persona's lines
+        into the current persona's chat history.
+
+        INPUT:
+          incoming_lines: List of [speaker, line] pairs to merge
+        OUTPUT:
+          int: Number of new lines added
+        """
+        if not incoming_lines:
+            return 0
+
+        if self.chat is None:
+            self.chat = []
+
+        # Build a set of existing lines for fast duplicate detection
+        # Use (speaker, line) tuples for comparison
+        existing = set()
+        for entry in self.chat:
+            if isinstance(entry, (list, tuple)) and len(entry) >= 2:
+                existing.add((entry[0], entry[1]))
+
+        # Add new lines that we don't already have
+        added_count = 0
+        for entry in incoming_lines:
+            if isinstance(entry, (list, tuple)) and len(entry) >= 2:
+                key = (entry[0], entry[1])
+                if key not in existing:
+                    self.chat.append(list(entry))
+                    existing.add(key)
+                    added_count += 1
+
+        return added_count
+
+    def end_conversation(self):
+        """
+        End the current conversation and return the full chat for memory storage.
+
+        Returns the chat contents and clears conversation state.
+
+        OUTPUT:
+          tuple: (chatting_with, chat_lines) where chat_lines is the full conversation
+                 Returns (None, None) if there was no active conversation
+        """
+        if not self.chatting_with:
+            return None, None
+
+        partner = self.chatting_with
+        chat_copy = self.chat.copy() if self.chat else []
+
+        # Clear conversation state
+        self.chatting_with = None
+        self.chat = None
+        self.chatting_with_buffer = {}
+        self.chatting_end_time = None
+        self.conversation_group_id = None
+
+        return partner, chat_copy
+
+    def get_conversation_participants(self) -> list[str]:
+        """
+        Get list of all participants in the current conversation.
+
+        Returns all speakers from the chat history, which may include
+        more than just chatting_with for group conversations.
+
+        OUTPUT:
+          list: Names of all conversation participants
+        """
+        participants = set()
+        if self.chatting_with:
+            participants.add(self.chatting_with)
+        if self.name:
+            participants.add(self.name)
+        if self.chat:
+            for entry in self.chat:
+                if isinstance(entry, (list, tuple)) and len(entry) >= 1:
+                    participants.add(entry[0])
+        return list(participants)

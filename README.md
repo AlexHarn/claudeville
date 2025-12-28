@@ -26,9 +26,22 @@ Fork of Stanford's [Generative Agents](https://github.com/joonspk-research/gener
 - **Mouse controls**: Click and drag to pan the map, scroll wheel to zoom (0.3x - 3x)
 - **Floating UI panels** with dark translucent styling:
   - Top control bar: time display, play/pause/skip, speed slider, zoom indicator
-  - Right persona panel: collapsible list of all personas with live status
+  - Right persona panel: collapsible list of all personas with live action/location
+  - Bottom chat popup: shows active conversations with speech bubbles
 - **Click persona cards** to center the camera on that character
 - **ESC menu**: Save game, view saved simulations
+
+### Conversations
+
+- **Group conversations**: 3+ personas can naturally join ongoing conversations when nearby
+- **Chat popup panel**: Bottom-center floating panel with:
+  - Tabs for multiple simultaneous conversations (initials + "+N" for groups)
+  - Click tab to pan camera to that conversation's location
+  - Auto-selects closest conversation to camera
+  - Minimizable with smooth animations
+  - Auto-fades 5 seconds after conversation ends
+- **Conversation positioning**: LLM prompted to stay stationary during dialogue, move closer for intimate chats
+- **Shared conversation groups**: Backend tracks `ConversationGroup` objects, syncs chat lines across all participants
 
 ### Simulation Control
 
@@ -46,6 +59,8 @@ Fork of Stanford's [Generative Agents](https://github.com/joonspk-research/gener
 - **Smart LLM Skip Logic**: Avoids redundant calls when actions are in progress
 - **Parallel Persona Execution**: All personas run concurrently per simulation step
 - **Memory storage**: Events, thoughts, chats in JSON with keyword-based retrieval
+- **Sleep-triggered compaction**: Context automatically compacted when persona goes to sleep
+- **Conversation memory**: Recent conversations (with dialogue) included in model context on init/compaction
 
 ### What Was Removed
 
@@ -162,11 +177,12 @@ claudeville/
 
 ## Roadmap
 
+- [x] Conversation display (chat popup panel with speech bubbles)
 - [ ] Smart persona panel ordering (by proximity to camera, recent actions, conversations)
 - [ ] Persona panel search/filter for large simulations
 - [ ] Minimap showing persona locations
 - [ ] Click-to-follow: lock camera to follow a specific persona
-- [ ] Conversation bubbles on map (speech bubbles above sprites)
+- [ ] Lecture scenario support (one speaker, multiple listeners)
 
 ## Acknowledgements
 

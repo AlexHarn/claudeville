@@ -107,15 +107,15 @@ class Persona:
         """
         return perceive(self, maze)
 
-    def move(self, maze, personas, curr_tile, curr_time):
+    async def move(self, maze, personas, curr_tile, curr_time):
         """
         Main cognitive function - decide what to do this simulation step.
 
         Uses UnifiedPersonaClient.step() for a single LLM call per step.
         Includes skip logic to avoid unnecessary LLM calls when:
         - Sleeping with no interruptions
-        - Walking to destination with no nearby personas
-        - Continuing current action with no new perceptions
+        - Walking to destination
+        - Continuing current action with no new nearby personas
 
         Returns:
             tuple: (next_tile, emoji, description, had_llm_call)
@@ -159,89 +159,43 @@ class Persona:
         ) = self._build_accessible_locations(maze)
 
         if new_day:
-            self._handle_new_day(new_day)
+            await self._handle_new_day(new_day)
 
-        step_response = self.unified_client.step(
+        # Build conversation context if we're in a conversation
+        conversation_context = None
+        if self.scratch.chatting_with and self.scratch.chat:
+            # Pass existing chat lines as context so the LLM knows what was said
+            conversation_context = self.scratch.chat
+
+        # Check for nearby conversations we could join
+        nearby_conversations = self._get_nearby_conversations(personas)
+
+        step_response = await self.unified_client.step(
             perceptions=perceptions,
             nearby_personas=nearby_personas,
             accessible_locations=accessible_locations,
             valid_sectors=valid_sectors,
             valid_arenas=valid_arenas,
             valid_objects=valid_objects,
-            conversation_context=None,
+            conversation_context=conversation_context,
+            nearby_conversations=nearby_conversations,
         )
 
         # Update acknowledged nearby after LLM call
         self._acknowledged_nearby = set(nearby_personas)
 
-        # Return with had_llm_call=True
-        return (*self._process_step_response(step_response, maze, personas), True)
+        # Process the step response
+        result = self._process_step_response(step_response, maze, personas)
 
-    async def move_async(self, maze, personas, curr_tile, curr_time):
-        """
-        Async version of move() for parallel execution.
-
-        Same logic as move() but uses async LLM calls.
-
-        Returns:
-            tuple: (next_tile, emoji, description, had_llm_call)
-            - had_llm_call: True if LLM was called, False if action was continued
-        """
-        self.scratch.curr_tile = curr_tile
-
-        # Check for new day
-        new_day = False
-        if not self.scratch.curr_time:
-            new_day = "First day"
-        elif self.scratch.curr_time.strftime("%A %B %d") != curr_time.strftime(
-            "%A %B %d"
-        ):
-            new_day = "New day"
-        self.scratch.curr_time = curr_time
-
-        # Perceive environment (always needed for spatial memory updates)
-        perceived_nodes = self.perceive(maze)
-        perceptions = self._build_perception_strings(maze, perceived_nodes)
-        nearby_personas = self._get_nearby_personas(maze, personas)
-
-        # =====================================================================
-        # SKIP LOGIC - Avoid unnecessary LLM calls
-        # =====================================================================
-        skip_result = self._should_skip_llm_call(
-            new_day, perceptions, nearby_personas, maze, personas
-        )
-        if skip_result:
-            # Return with had_llm_call=False
-            return (*skip_result, False)
-
-        # =====================================================================
-        # LLM DECISION - Need to make a new decision
-        # =====================================================================
-        (
-            accessible_locations,
-            valid_sectors,
-            valid_arenas,
-            valid_objects,
-        ) = self._build_accessible_locations(maze)
-
-        if new_day:
-            await self._handle_new_day_async(new_day)
-
-        step_response = await self.unified_client.step_async(
-            perceptions=perceptions,
-            nearby_personas=nearby_personas,
-            accessible_locations=accessible_locations,
-            valid_sectors=valid_sectors,
-            valid_arenas=valid_arenas,
-            valid_objects=valid_objects,
-            conversation_context=None,
-        )
-
-        # Update acknowledged nearby after LLM call
-        self._acknowledged_nearby = set(nearby_personas)
+        # Check if persona is going to sleep - trigger compaction
+        if step_response.action:
+            action_desc = step_response.action.description.lower()
+            if "sleep" in action_desc or "go to bed" in action_desc:
+                # Compact the context when going to sleep
+                await self.unified_client.compact_for_sleep()
 
         # Return with had_llm_call=True
-        return (*self._process_step_response(step_response, maze, personas), True)
+        return (*result, True)
 
     # =========================================================================
     # SKIP LOGIC
@@ -403,6 +357,49 @@ class Persona:
         # Remove duplicates
         return list(set(nearby))
 
+    def _get_nearby_conversations(self, personas) -> list[dict]:
+        """
+        Get list of nearby conversations that this persona could join.
+
+        Checks if any nearby personas are in an active conversation
+        that this persona is NOT part of.
+
+        Returns:
+            list of dicts: [{"participants": ["A", "B"], "chat": [("A", "Hi"), ...]}]
+        """
+        nearby_convos = []
+        seen_groups = set()
+
+        for name, _ in self._acknowledged_nearby:
+            if name not in personas:
+                continue
+
+            other_persona = personas[name]
+            other_scratch = other_persona.scratch
+
+            # Check if this persona is in a conversation
+            if other_scratch.chatting_with and other_scratch.chat:
+                # Make sure we're not already in this conversation
+                participants = other_scratch.get_conversation_participants()
+                if self.name in participants:
+                    continue
+
+                # Create a unique key for this conversation group
+                group_key = tuple(sorted(participants))
+                if group_key in seen_groups:
+                    continue
+                seen_groups.add(group_key)
+
+                nearby_convos.append(
+                    {
+                        "participants": participants,
+                        "chat": other_scratch.chat[:10],  # Limit to last 10 lines
+                        "group_id": other_scratch.conversation_group_id,
+                    }
+                )
+
+        return nearby_convos
+
     def _build_accessible_locations(self, maze):
         """
         Build the accessible locations structure from spatial memory.
@@ -445,7 +442,7 @@ class Persona:
 
         return accessible_locations, valid_sectors, valid_arenas, valid_objects
 
-    def _handle_new_day(self, new_day):
+    async def _handle_new_day(self, new_day):
         """
         Handle new day initialization - generate wake up hour and daily schedule.
 
@@ -455,49 +452,7 @@ class Persona:
         date_str = self.scratch.curr_time.strftime("%A, %B %d, %Y")
 
         # Call LLM to generate personalized daily plan
-        day_plan = self.unified_client.plan_day(date_str)
-
-        if day_plan.parse_errors:
-            # Fall back to default schedule if LLM fails
-            self._set_default_schedule()
-        else:
-            # Apply the LLM-generated schedule
-            self.scratch.wake_up_hour = day_plan.wake_up_hour
-            self.scratch.daily_req = day_plan.daily_goals
-
-            # Convert schedule to expected format: [["activity", duration], ...]
-            schedule = [
-                [activity, duration] for activity, duration in day_plan.schedule
-            ]
-            self.scratch.f_daily_schedule = schedule
-            self.scratch.f_daily_schedule_hourly_org = schedule[:]
-
-        # Add plan to memory
-        thought = f"This is {self.scratch.name}'s plan for {date_str}"
-        if self.scratch.daily_req:
-            goals_summary = ", ".join(self.scratch.daily_req[:3])
-            thought += f": {goals_summary}"
-
-        created = self.scratch.curr_time
-        expiration = self.scratch.curr_time + datetime.timedelta(days=30)
-        s, p, o = (
-            self.scratch.name,
-            "plan",
-            self.scratch.curr_time.strftime("%A %B %d"),
-        )
-        keywords = set(["plan", "daily", "schedule"])
-        self.a_mem.add_thought(
-            created, expiration, s, p, o, thought, keywords, 5, thought, None
-        )
-
-    async def _handle_new_day_async(self, new_day):
-        """
-        Async version of _handle_new_day for parallel execution.
-        """
-        date_str = self.scratch.curr_time.strftime("%A, %B %d, %Y")
-
-        # Call LLM to generate personalized daily plan (async)
-        day_plan = await self.unified_client.plan_day_async(date_str)
+        day_plan = await self.unified_client.plan_day(date_str)
 
         if day_plan.parse_errors:
             self._set_default_schedule()
