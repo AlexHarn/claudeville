@@ -571,7 +571,10 @@ class ReverieServer:
         other's dialogue responses within a single simulation step.
         """
         # Step 0: Remove out-of-range participants from existing groups
-        # This handles cases where personas walked away from the conversation
+        # Use a larger range for CONTINUING conversations than for starting new ones
+        # This prevents conversations from breaking when people briefly move around
+        CONVERSATION_CONTINUATION_RANGE = 8  # More lenient than vision_r (typically 4)
+
         for group_id, group in list(self.active_conversations.items()):
             if len(group.participants) < 2:
                 continue
@@ -584,15 +587,16 @@ class ReverieServer:
                     continue
 
                 my_tile = self.personas_tile.get(participant)
-                vision_r = self.personas[participant].scratch.vision_r
 
-                # Check if this participant is within range of at least one other
+                # Check if this participant is within extended range of at least one other
                 has_nearby_partner = False
                 for other in group.participants:
                     if other == participant or other not in self.personas:
                         continue
                     other_tile = self.personas_tile.get(other)
-                    if _are_within_range(my_tile, other_tile, vision_r):
+                    if _are_within_range(
+                        my_tile, other_tile, CONVERSATION_CONTINUATION_RANGE
+                    ):
                         has_nearby_partner = True
                         break
 
