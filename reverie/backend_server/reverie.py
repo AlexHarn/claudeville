@@ -53,6 +53,8 @@ class ConversationGroup:
     location_tile: tuple = (0, 0)  # Anchor location (first participant's tile)
     started_at: datetime.datetime = None
     end_time: datetime.datetime = None
+    last_activity: datetime.datetime = None  # Last time a new message was added
+    stale_steps: int = 0  # Steps since last new message
 
     def add_participant(self, name: str) -> bool:
         """Add a participant to the conversation. Returns True if newly added."""
@@ -61,19 +63,23 @@ class ConversationGroup:
         self.participants.add(name)
         return True
 
-    def add_line(self, speaker: str, line: str) -> bool:
+    def add_line(
+        self, speaker: str, line: str, curr_time: datetime.datetime = None
+    ) -> bool:
         """Add a chat line. Returns True if added (not duplicate)."""
         entry = (speaker, line)
         if entry not in [(spk, txt) for spk, txt in self.chat]:
             self.chat.append(entry)
+            self.last_activity = curr_time
+            self.stale_steps = 0  # Reset stale counter on new activity
             return True
         return False
 
-    def merge_lines(self, lines: list) -> int:
+    def merge_lines(self, lines: list, curr_time: datetime.datetime = None) -> int:
         """Merge lines from another source. Returns count of new lines added."""
         added = 0
         for speaker, line in lines:
-            if self.add_line(speaker, line):
+            if self.add_line(speaker, line, curr_time):
                 added += 1
         return added
 
@@ -527,6 +533,15 @@ class ReverieServer:
             "active_personas"
         ] = active_personas  # List of personas who made decisions
 
+        # Add active conversation groups for frontend display
+        movements["meta"]["conversations"] = {
+            group_id: {
+                "participants": list(group.participants),
+                "line_count": len(group.chat),
+            }
+            for group_id, group in self.active_conversations.items()
+        }
+
         # Advance simulation state
         self.step += 1
         self.curr_time += datetime.timedelta(seconds=self.sec_per_step)
@@ -670,17 +685,28 @@ class ReverieServer:
                 # Update persona's group reference
                 self.personas[name].scratch.conversation_group_id = group_id
 
-            # Add partner to group if valid persona AND within range
-            if partner in self.personas and partner not in group.participants:
-                partner_tile = self.personas_tile.get(partner)
-                if _are_within_range(my_tile, partner_tile, vision_r):
-                    group.add_participant(partner)
-                    persona_to_group[partner] = group_id
-                    # Update partner's group reference
-                    self.personas[partner].scratch.conversation_group_id = group_id
+            # Add all conversation targets to group (supports multi-target/broadcast)
+            # chatting_with_buffer contains all targets from persona's social decision
+            all_targets = set()
+            if partner:
+                all_targets.add(partner)
+            # Also add anyone from the chatting_with_buffer (for multi-target)
+            if self.personas[name].scratch.chatting_with_buffer:
+                all_targets.update(
+                    self.personas[name].scratch.chatting_with_buffer.keys()
+                )
+
+            for target in all_targets:
+                if target in self.personas and target not in group.participants:
+                    target_tile = self.personas_tile.get(target)
+                    if _are_within_range(my_tile, target_tile, vision_r):
+                        group.add_participant(target)
+                        persona_to_group[target] = group_id
+                        # Update target's group reference
+                        self.personas[target].scratch.conversation_group_id = group_id
 
             # Merge this persona's chat lines into the group
-            group.merge_lines(chat_lines)
+            group.merge_lines(chat_lines, self.curr_time)
 
         # Step 4: Synchronize all group members' chat lists
         for group_id, group in list(self.active_conversations.items()):
@@ -769,49 +795,72 @@ class ReverieServer:
                 )
 
         # Step 6: Check for conversations that have ended (by time)
+        # Each person ends individually - others can still respond before they also end
+        # This allows farewell exchanges where both parties can say goodbye
         ended_groups = []
         for name, persona in self.personas.items():
             scratch = persona.scratch
             if scratch.chatting_end_time and scratch.curr_time:
                 if scratch.curr_time >= scratch.chatting_end_time:
-                    # Find and mark the group as ended
                     group_id = scratch.conversation_group_id
-                    if group_id and group_id not in ended_groups:
-                        ended_groups.append(group_id)
+                    group = (
+                        self.active_conversations.get(group_id) if group_id else None
+                    )
+
+                    # End just for this persona - remove them from the group
+                    # Others can still respond; group cleaned up when empty
                     self._end_and_store_conversation(persona)
-                    # Clear the group reference
                     scratch.conversation_group_id = None
 
-        # Step 7: Clean up orphaned or single-participant groups
+                    if group:
+                        group.remove_participant(name)
+                        # If only one person left, they can still send one more message
+                        # Group will be cleaned up in Step 7 when it becomes empty/stale
+
+        # Step 7: Clean up orphaned, single-participant, or stale groups
+        STALE_THRESHOLD = 5  # Auto-end after 5 steps of no new messages
         for group_id, group in list(self.active_conversations.items()):
             if group_id in ended_groups:
                 continue  # Already marked for deletion
 
+            # Increment stale counter for groups with no new activity
+            group.stale_steps += 1
+
+            # Remove individual participants who have stopped chatting
+            # (their chatting_with is now None, meaning they started a different action)
+            inactive_participants = []
+            for participant in list(group.participants):
+                if participant in self.personas:
+                    scratch = self.personas[participant].scratch
+                    if not scratch.chatting_with:
+                        inactive_participants.append(participant)
+
+            for participant in inactive_participants:
+                self._end_and_store_conversation(self.personas[participant])
+                self.personas[participant].scratch.conversation_group_id = None
+                group.remove_participant(participant)
+
             # Clean up single-participant groups (everyone else left)
             if len(group.participants) < 2:
                 ended_groups.append(group_id)
-                for participant in group.participants:
+                for participant in list(group.participants):
                     if participant in self.personas:
                         self._end_and_store_conversation(self.personas[participant])
                         self.personas[participant].scratch.conversation_group_id = None
                 continue
 
-            # Check if ANY participant is still actively chatting
-            has_active_chatter = False
-            for participant in group.participants:
-                if participant in self.personas:
-                    scratch = self.personas[participant].scratch
-                    if scratch.chatting_with:
-                        has_active_chatter = True
-                        break
-
-            if not has_active_chatter:
-                # No one in this group is chatting anymore - clean it up
+            # Auto-end stale conversations (no new messages for too long)
+            if group.stale_steps >= STALE_THRESHOLD:
+                cli.print_info(
+                    f"  Auto-ending stale conversation [{group_id}] "
+                    f"({group.stale_steps} steps inactive)"
+                )
                 ended_groups.append(group_id)
-                # Clear group references from all participants
-                for participant in group.participants:
+                for participant in list(group.participants):
                     if participant in self.personas:
+                        self._end_and_store_conversation(self.personas[participant])
                         self.personas[participant].scratch.conversation_group_id = None
+                continue
 
         # Clean up ended conversation groups
         for group_id in ended_groups:

@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import asyncio
 import atexit
+import datetime
 import json
 import re
 import threading
@@ -75,9 +76,8 @@ class SocialDecision:
     """Parsed social decision from model response."""
 
     wants_to_talk: bool = False
-    target: str | None = None
+    target: str | list[str] | None = None  # Single person or list for group/broadcast
     conversation_line: str | None = None
-    end_conversation: bool = False  # Set to true to end the current conversation
 
 
 @dataclass
@@ -297,17 +297,26 @@ Optional fields: continuing (default false), action (required if continuing is f
 === CONVERSATIONS ===
 When interacting with someone nearby:
 - Set wants_to_talk: true
-- Set target: their name
+- Set target: their name (or a list of names for group address)
 - Set conversation_line: what you actually SAY to them (dialogue in quotes)
-Example: "conversation_line": "Hey Maria! How's your studying going?"
+
+Examples:
+- One person: "target": "Maria", "conversation_line": "Hey Maria! How's your studying going?"
+- Multiple people: "target": ["Alice", "Bob", "Charlie"], "conversation_line": "Good morning everyone! Let's get started."
+
 The conversation_line is ACTUAL DIALOGUE that will be shown as a speech bubble.
 
-TO END A CONVERSATION: Set "end_conversation": true in your social response.
-End conversations when you've finished speaking - don't keep them "active" for several steps of silence.
-Natural endings include: you've said what you needed, the conversation feels complete, or there's
-a natural pause. If you're still hanging out together, a NEW conversation can start a few steps later
-if something new comes up to discuss. The point is to avoid having conversations marked "active" when
-nothing is being said. End it, and if you want to chat again later, start a fresh one.
+NATURAL CONVERSATION FLOW:
+- Speak when you have something to say, stay silent when you don't
+- If you're done talking, simply don't provide a conversation_line - no explicit "end" needed
+- Conversations naturally end when: people walk away, start other activities, or go quiet
+- You can always start a new conversation later - even with the same person moments later
+- Don't feel obligated to keep talking just because someone spoke to you - respond only if you genuinely want to
+
+GROUP ADDRESSING (lectures, announcements, etc):
+- Use a list of names when speaking to multiple people: "target": ["Student1", "Student2", "Student3"]
+- All listed people will be included in the conversation group
+- Any of them can respond back to you
 
 === REALITY RULES ===
 1. PHYSICAL: You can only interact with objects at your current location. To use something elsewhere, travel there first.
@@ -798,7 +807,6 @@ def parse_step_response(
         wants_to_talk=social_data.get("wants_to_talk", False),
         target=social_data.get("target"),
         conversation_line=social_data.get("conversation_line"),
-        end_conversation=social_data.get("end_conversation", False),
     )
 
     # Parse thoughts
@@ -1489,11 +1497,19 @@ def find_tiles_for_location(
 
 
 def _get_recent_memories(persona: Persona, limit: int = 15) -> str:
-    """Get formatted recent important memories for initial prompt."""
+    """Get formatted recent important memories for initial prompt.
+
+    Prioritizes TODAY's events (all of them) over older events.
+    For older events, uses importance/poignancy to select the most significant.
+    """
     if not hasattr(persona, "a_mem"):
         return ""
 
     lines = []
+
+    # Get current date from scratch for "today" comparison
+    curr_time = getattr(persona.scratch, "curr_time", None)
+    today = curr_time.date() if curr_time else None
 
     # Get recent conversations with full content
     if hasattr(persona.a_mem, "seq_chat") and persona.a_mem.seq_chat:
@@ -1510,26 +1526,59 @@ def _get_recent_memories(persona: Persona, limit: int = 15) -> str:
                 for speaker, line in filling[-6:]:  # Last 6 lines of each convo
                     lines.append(f'    {speaker}: "{line}"')
 
-    # Get recent events and thoughts
-    nodes = []
+    # Collect all events and thoughts
+    all_nodes = []
     if hasattr(persona.a_mem, "seq_event"):
-        nodes.extend(persona.a_mem.seq_event[-50:])
+        all_nodes.extend(persona.a_mem.seq_event)
     if hasattr(persona.a_mem, "seq_thought"):
-        nodes.extend(persona.a_mem.seq_thought[-20:])
+        all_nodes.extend(persona.a_mem.seq_thought)
 
-    # Sort by poignancy (importance)
-    nodes = [n for n in nodes if hasattr(n, "poignancy") and hasattr(n, "description")]
-    nodes.sort(key=lambda n: n.poignancy, reverse=True)
-    nodes = nodes[:limit]
+    # Filter to nodes with required attributes
+    all_nodes = [
+        n for n in all_nodes if hasattr(n, "poignancy") and hasattr(n, "description")
+    ]
 
-    for node in nodes:
-        desc = node.description
+    # Separate today's events from older events
+    today_nodes = []
+    older_nodes = []
+
+    for node in all_nodes:
         created = getattr(node, "created", None)
-        if created and hasattr(created, "strftime"):
-            time_str = created.strftime("%B %d, %H:%M")
-            lines.append(f"- [{time_str}] {desc}")
+        if created and today and created.date() == today:
+            today_nodes.append(node)
         else:
-            lines.append(f"- {desc}")
+            older_nodes.append(node)
+
+    # Sort today's events by time (chronological)
+    today_nodes.sort(key=lambda n: getattr(n, "created", None) or datetime.datetime.min)
+
+    # Sort older events by importance, take top ones
+    older_nodes.sort(key=lambda n: n.poignancy, reverse=True)
+    older_nodes = older_nodes[:limit]
+
+    # Add TODAY section if we have events
+    if today_nodes:
+        lines.append("TODAY:")
+        for node in today_nodes:
+            desc = node.description
+            created = getattr(node, "created", None)
+            if created and hasattr(created, "strftime"):
+                time_str = created.strftime("%H:%M")
+                lines.append(f"  - [{time_str}] {desc}")
+            else:
+                lines.append(f"  - {desc}")
+
+    # Add EARLIER MEMORIES section for important older events
+    if older_nodes:
+        lines.append("EARLIER MEMORIES:")
+        for node in older_nodes:
+            desc = node.description
+            created = getattr(node, "created", None)
+            if created and hasattr(created, "strftime"):
+                time_str = created.strftime("%B %d, %H:%M")
+                lines.append(f"  - [{time_str}] {desc}")
+            else:
+                lines.append(f"  - {desc}")
 
     return "\n".join(lines) if lines else ""
 

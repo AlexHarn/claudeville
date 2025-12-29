@@ -680,13 +680,19 @@
 		const chatPopup = document.getElementById('chat-popup');
 		if (!chatPopup || !movements || !movements.persona) return;
 
+		// Use backend's authoritative conversation groups if available
+		const backendConvos = movements.meta?.conversations || {};
+
 		// Collect all unique chat lines from all personas
 		// Key is "speaker:line", value is {speaker, line, location}
 		let allLines = new Map();
-		let allParticipants = new Set();
+		let firstLocation = null;
 
 		for (const [name, data] of Object.entries(movements.persona)) {
 			if (data.chat && data.chat.length > 0) {
+				if (!firstLocation) {
+					firstLocation = { x: data.movement[0], y: data.movement[1] };
+				}
 				for (const [speaker, line] of data.chat) {
 					const key = `${speaker}:${line}`;
 					if (!allLines.has(key)) {
@@ -697,21 +703,30 @@
 							location: { x: data.movement[0], y: data.movement[1] }
 						});
 					}
-					allParticipants.add(speaker);
 				}
 			}
 		}
 
-		// If we have any chat lines, create a single conversation group
-		// (In the future, we could split by location if personas are far apart)
+		// Build conversation objects using backend's participant list
 		let activeConvos = {};
-		if (allLines.size > 0) {
-			const convoId = [...allParticipants].sort().join('_');
-			const firstLine = allLines.values().next().value;
+		for (const [groupId, groupInfo] of Object.entries(backendConvos)) {
+			if (groupInfo.participants && groupInfo.participants.length > 0) {
+				activeConvos[groupId] = {
+					participants: new Set(groupInfo.participants),
+					lines: [...allLines.values()],
+					location: firstLocation || { x: 0, y: 0 }
+				};
+			}
+		}
+
+		// Fallback: if no backend convos but we have chat lines, derive from speakers
+		if (Object.keys(activeConvos).length === 0 && allLines.size > 0) {
+			const speakers = new Set([...allLines.values()].map(l => l.speaker));
+			const convoId = [...speakers].sort().join('_');
 			activeConvos[convoId] = {
-				participants: allParticipants,
+				participants: speakers,
 				lines: [...allLines.values()],
-				location: firstLine.location
+				location: firstLocation
 			};
 		}
 

@@ -570,39 +570,38 @@ class Persona:
         chatting_with_buffer = None
         chatting_end_time = None
 
-        # Check if LLM wants to end the conversation
-        if social.end_conversation and self.scratch.chatting_with:
-            cli.print_info(f"  {self.name} is ending conversation")
-            # Don't clear here - let reverie.py handle storage via _end_and_store_conversation
-            # Just signal by setting chatting_end_time to current time (immediate end)
-            chatting_end_time = self.scratch.curr_time
-            # Keep the existing chat and chatting_with for proper cleanup
-            chatting_with = self.scratch.chatting_with
-            chat = self.scratch.chat.copy() if self.scratch.chat else None
-            chatting_with_buffer = self.scratch.chatting_with_buffer
+        # Normalize target to a list for uniform handling
+        targets = []
+        if social.target:
+            if isinstance(social.target, list):
+                targets = social.target
+            else:
+                targets = [social.target]
 
-        # Only process social interaction if target is actually nearby
-        target_is_nearby = (
-            not social.target
-            or social.target in nearby_names
-            or self.scratch.chatting_with == social.target  # Already in conversation
-        )
+        # Check which targets are actually nearby
+        nearby_targets = [
+            t for t in targets if t in nearby_names or self.scratch.chatting_with == t
+        ]
+        missing_targets = [t for t in targets if t not in nearby_targets]
 
-        if (
-            not social.end_conversation
-            and social.wants_to_talk
-            and social.target
-            and social.conversation_line
-        ):
-            if not target_is_nearby:
-                # Target isn't actually nearby - log and skip the conversation
+        if social.wants_to_talk and targets and social.conversation_line:
+            if not nearby_targets:
+                # No targets are nearby - log and skip
                 cli.print_info(
-                    f"  {self.name} wanted to talk to {social.target} "
-                    f"but they're not nearby (ignoring)"
+                    f"  {self.name} wanted to talk to {targets} "
+                    f"but none are nearby (ignoring)"
                 )
             else:
+                if missing_targets:
+                    # Some targets missing - log but continue with those present
+                    cli.print_info(
+                        f"  {self.name} addressing {nearby_targets} "
+                        f"(missing: {missing_targets})"
+                    )
+
                 # Starting or continuing a conversation
-                chatting_with = social.target
+                # For chatting_with, use first target (primary addressee)
+                chatting_with = nearby_targets[0]
 
                 # Build chat list - either append to existing or start new
                 if self.scratch.chat:
@@ -613,8 +612,10 @@ class Persona:
                 # Add our line to the conversation
                 chat.append([self.name, social.conversation_line])
 
-                # Set chatting buffer (for vision tracking)
-                chatting_with_buffer = {social.target: self.scratch.vision_r}
+                # Set chatting buffer for ALL nearby targets (for vision tracking)
+                chatting_with_buffer = {
+                    t: self.scratch.vision_r for t in nearby_targets
+                }
 
                 # Set conversation end time based on action duration
                 chatting_end_time = self.scratch.curr_time + datetime.timedelta(
@@ -794,17 +795,7 @@ class Persona:
 
         This allows the persona to respond in conversation even while staying in place.
         """
-        if not social:
-            return
-
-        # Check if LLM wants to end the conversation
-        if social.end_conversation and self.scratch.chatting_with:
-            cli.print_info(f"  {self.name} is ending conversation (while continuing)")
-            # Signal conversation end by setting chatting_end_time to now
-            self.scratch.chatting_end_time = self.scratch.curr_time
-            return
-
-        if not social.conversation_line:
+        if not social or not social.conversation_line:
             return
 
         # Validate social target is actually nearby
@@ -812,17 +803,24 @@ class Persona:
         if nearby_personas:
             nearby_names = {name for name, _ in nearby_personas}
 
-        target_is_nearby = (
-            not social.target
-            or social.target in nearby_names
-            or self.scratch.chatting_with == social.target  # Already in conversation
-        )
+        # Normalize target to a list for uniform handling
+        targets = []
+        if social.target:
+            if isinstance(social.target, list):
+                targets = social.target
+            else:
+                targets = [social.target]
 
-        if social.wants_to_talk and social.target and social.conversation_line:
-            if not target_is_nearby:
+        # Check which targets are actually nearby
+        nearby_targets = [
+            t for t in targets if t in nearby_names or self.scratch.chatting_with == t
+        ]
+
+        if social.wants_to_talk and targets and social.conversation_line:
+            if not nearby_targets:
                 cli.print_info(
-                    f"  {self.name} wanted to talk to {social.target} "
-                    f"but they're not nearby (ignoring)"
+                    f"  {self.name} wanted to talk to {targets} "
+                    f"but none are nearby (ignoring)"
                 )
             else:
                 # Add line to existing conversation
@@ -833,9 +831,9 @@ class Persona:
 
                 # Update chatting_with if starting new conversation
                 if not self.scratch.chatting_with:
-                    self.scratch.chatting_with = social.target
+                    self.scratch.chatting_with = nearby_targets[0]
                     self.scratch.chatting_with_buffer = {
-                        social.target: self.scratch.vision_r
+                        t: self.scratch.vision_r for t in nearby_targets
                     }
 
                 cli.print_conversation_line(self.name, social.conversation_line)
