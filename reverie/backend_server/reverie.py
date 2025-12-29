@@ -6,6 +6,7 @@ File: reverie.py
 Description: Main program for running generative agent simulations.
 """
 
+import asyncio
 import datetime
 import json
 import math
@@ -476,24 +477,39 @@ class ReverieServer:
             )
 
         async def run_all_personas():
-            """Run all personas sequentially to avoid SDK connection issues."""
-            # Note: Running sequentially for now due to Claude SDK handling
-            # multiple concurrent connections poorly. Can switch back to
-            # asyncio.gather once SDK improves.
-            results = []
-            for name, persona in self.personas.items():
-                result = await run_persona_move(name, persona)
-                results.append(result)
-            return results
+            """Run all personas in parallel using asyncio.gather."""
+            tasks = [
+                run_persona_move(name, persona)
+                for name, persona in self.personas.items()
+            ]
+            return await asyncio.gather(*tasks, return_exceptions=True)
 
         # Run all persona moves in parallel using the shared event loop
         # This ensures Flask thread uses the same loop as Claude SDK clients
-        results = _run_async(run_all_personas())
+        try:
+            results = _run_async(run_all_personas())
+            # Check for exceptions in results
+            for r in results:
+                if isinstance(r, Exception):
+                    cli.print_error(f"Persona move failed: {r}")
+                    import traceback
+
+                    traceback.print_exception(type(r), r, r.__traceback__)
+        except Exception as e:
+            cli.print_error(f"Fatal error in parallel execution: {e}")
+            import traceback
+
+            traceback.print_exc()
+            raise
 
         # Track if any persona had an LLM call (new action)
         any_llm_call = False
         active_personas = []  # Track which personas made LLM decisions
-        for name, next_tile, pronunciatio, description, chat, had_llm_call in results:
+        for result in results:
+            # Skip exceptions (already logged above)
+            if isinstance(result, Exception):
+                continue
+            name, next_tile, pronunciatio, description, chat, had_llm_call = result
             movements["persona"][name] = {
                 "movement": next_tile,
                 "pronunciatio": pronunciatio,
@@ -572,10 +588,18 @@ class ReverieServer:
         This is critical because personas run in parallel and don't see each
         other's dialogue responses within a single simulation step.
         """
+        # Conversation range - larger than vision_r since people can chat across a room
+        CONVERSATION_RANGE = 10
+
+        def can_converse(tile1, tile2) -> bool:
+            """Check if two tiles are within conversation range AND have line of sight."""
+            if not tile1 or not tile2:
+                return False
+            if _tile_distance(tile1, tile2) > CONVERSATION_RANGE:
+                return False
+            return self.maze.has_line_of_sight(tile1, tile2)
+
         # Step 0: Remove out-of-range participants from existing groups
-        # Use a larger range for CONTINUING conversations than for starting new ones
-        # This prevents conversations from breaking when people briefly move around
-        CONVERSATION_CONTINUATION_RANGE = 8  # More lenient than vision_r (typically 4)
 
         for group_id, group in list(self.active_conversations.items()):
             if len(group.participants) < 2:
@@ -596,9 +620,7 @@ class ReverieServer:
                     if other == participant or other not in self.personas:
                         continue
                     other_tile = self.personas_tile.get(other)
-                    if _are_within_range(
-                        my_tile, other_tile, CONVERSATION_CONTINUATION_RANGE
-                    ):
+                    if can_converse(my_tile, other_tile):
                         has_nearby_partner = True
                         break
 
@@ -638,7 +660,6 @@ class ReverieServer:
             group = None
             group_id = None
             my_tile = self.personas_tile.get(name)
-            vision_r = self.personas[name].scratch.vision_r
 
             # Check if this persona is already in a group
             if name in persona_to_group:
@@ -646,10 +667,10 @@ class ReverieServer:
                 group = self.active_conversations.get(group_id)
 
             # Check if partner is already in a group we should join
-            # BUT only if we're within range of them!
+            # BUT only if we're within range of them (distance + line of sight)
             if not group and partner in persona_to_group:
                 partner_tile = self.personas_tile.get(partner)
-                if _are_within_range(my_tile, partner_tile, vision_r):
+                if can_converse(my_tile, partner_tile):
                     group_id = persona_to_group[partner]
                     group = self.active_conversations.get(group_id)
                     if group:
@@ -658,8 +679,7 @@ class ReverieServer:
                         # Update persona's group reference
                         self.personas[name].scratch.conversation_group_id = group_id
                 else:
-                    # Partner too far away - can't join their conversation
-                    # End this persona's conversation attempt
+                    # Partner too far away or blocked by wall
                     cli.print_info(
                         f"  {name} tried to chat with {partner} but they're too far away"
                     )
@@ -670,10 +690,8 @@ class ReverieServer:
             if not group:
                 # Validate partner is within range before creating group
                 partner_tile = self.personas_tile.get(partner)
-                if partner in self.personas and not _are_within_range(
-                    my_tile, partner_tile, vision_r
-                ):
-                    # Can't start conversation - partner too far
+                if partner in self.personas and not can_converse(my_tile, partner_tile):
+                    # Can't start conversation - partner too far or blocked
                     cli.print_info(
                         f"  {name} tried to chat with {partner} but they're too far away"
                     )
@@ -705,7 +723,7 @@ class ReverieServer:
             for target in all_targets:
                 if target in self.personas and target not in group.participants:
                     target_tile = self.personas_tile.get(target)
-                    if _are_within_range(my_tile, target_tile, vision_r):
+                    if can_converse(my_tile, target_tile):
                         group.add_participant(target)
                         persona_to_group[target] = group_id
                         # Update target's group reference
@@ -772,10 +790,9 @@ class ReverieServer:
             if not persona_b.scratch.chatting_with and chat_lines:
                 my_tile = self.personas_tile.get(name)
                 partner_tile = self.personas_tile.get(partner)
-                vision_r = self.personas[name].scratch.vision_r
 
-                if not _are_within_range(my_tile, partner_tile, vision_r):
-                    # Too far apart - don't initiate conversation
+                if not can_converse(my_tile, partner_tile):
+                    # Too far apart or blocked by wall
                     continue
 
                 persona_b.scratch.chatting_with = name

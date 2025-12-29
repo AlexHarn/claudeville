@@ -212,7 +212,8 @@
 	function getAnimationDelay() {
 		// During skip mode, run at max speed (no delay)
 		if (isSkipping) return 0;
-		return Math.max(10, 400 - (playbackSpeed * 40));
+		// Scale delay: speed 1 = 400ms, speed 50 = 10ms
+		return Math.max(10, Math.floor(400 / playbackSpeed));
 	}
 
 	function animateMovements() {

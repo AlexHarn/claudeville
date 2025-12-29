@@ -328,6 +328,52 @@ class Maze:
                 nearby_tiles += [(i, j)]
         return nearby_tiles
 
+    def has_line_of_sight(self, tile1, tile2):
+        """
+        Check if there's a clear line of sight between two tiles (no walls).
+
+        Uses Bresenham's line algorithm to trace tiles between the two points
+        and checks if any of them are collision tiles (walls).
+
+        INPUT:
+          tile1: First tile coordinate (x, y)
+          tile2: Second tile coordinate (x, y)
+        OUTPUT:
+          True if there's a clear line of sight, False if blocked by walls
+        """
+        x1, y1 = tile1
+        x2, y2 = tile2
+
+        dx = abs(x2 - x1)
+        dy = abs(y2 - y1)
+        sx = 1 if x1 < x2 else -1
+        sy = 1 if y1 < y2 else -1
+        err = dx - dy
+
+        x, y = x1, y1
+        while True:
+            # Check if current tile is within bounds and not a wall
+            if 0 <= y < self.maze_height and 0 <= x < self.maze_width:
+                if self.tiles[y][x]["collision"]:
+                    return False
+            else:
+                # Out of bounds - treat as blocked
+                return False
+
+            # Reached destination
+            if x == x2 and y == y2:
+                break
+
+            e2 = 2 * err
+            if e2 > -dy:
+                err -= dy
+                x += sx
+            if e2 < dx:
+                err += dx
+                y += sy
+
+        return True
+
     def add_event_from_tile(self, curr_event, tile):
         """
         Add an event triple to a tile.

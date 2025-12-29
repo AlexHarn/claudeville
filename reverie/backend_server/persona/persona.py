@@ -696,17 +696,38 @@ class Persona:
             curr_tile_info.get("world", ""),
             curr_tile_info.get("sector", ""),
             curr_tile_info.get("arena", ""),
+            curr_tile_info.get("game_object", ""),
         ]
-        curr_arena_address = ":".join(curr_address_parts)
+        curr_full_address = ":".join(curr_address_parts)
 
-        # Extract arena-level address from target (first 3 parts)
+        # Compare at the appropriate level based on target specificity
         target_parts = act_address.split(":")
-        target_arena_address = (
-            ":".join(target_parts[:3]) if len(target_parts) >= 3 else act_address
-        )
 
-        if curr_arena_address == target_arena_address:
-            # Already at the target arena - stay in place
+        # If target has 4 parts (includes object), compare full address
+        # Otherwise compare at arena level (3 parts)
+        if len(target_parts) >= 4 and target_parts[3]:
+            # Target specifies an object - compare full address
+            curr_compare = curr_full_address
+            target_compare = act_address
+        else:
+            # Target is arena-level - compare arenas
+            curr_compare = ":".join(curr_address_parts[:3])
+            target_compare = (
+                ":".join(target_parts[:3]) if len(target_parts) >= 3 else act_address
+            )
+
+        # DEBUG: Log location resolution
+        from persona.prompt_template.claude_structure import DEBUG_VERBOSITY
+
+        if DEBUG_VERBOSITY >= 2:
+            print(
+                f"    [LOC] {self.name}: curr='{curr_compare}' target='{target_compare}'"
+            )
+
+        if curr_compare == target_compare:
+            # Already at the target location - stay in place
+            if DEBUG_VERBOSITY >= 2:
+                print(f"    [LOC] {self.name}: Already at target, staying in place")
             return self.scratch.curr_tile
 
         # Need to find a path to the target location

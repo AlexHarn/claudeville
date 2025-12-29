@@ -566,6 +566,9 @@ PHYSICAL:
 - You can ONLY interact with objects HERE, not elsewhere
 - To use something at another location, you must TRAVEL there first
 - Set your action's location to where you CURRENTLY ARE or where you're GOING
+- ONE ACTION = ONE LOCATION. Don't combine activities at different places into one action.
+  Bad: "waking up, showering, and getting dressed" (spans bedroom + bathroom + closet)
+  Good: "waking up and stretching in bed" (just bedroom, then next action is shower)
 
 TEMPORAL:
 - Current time: {time_str}
