@@ -229,7 +229,7 @@ def build_initial_prompt(
 """
     else:
         # Get recent important memories for fresh session
-        memories = _get_recent_memories(persona, limit=15)
+        memories = _get_recent_memories(persona)
         if memories:
             memory_section = f"""
 === RECENT MEMORIES ===
@@ -871,26 +871,49 @@ class UnifiedPersonaClient:
                     model="opus",
                 )
                 client = ClaudeSDKClient(options)
-                await client.connect()
+                try:
+                    await asyncio.wait_for(client.connect(), timeout=30.0)
+                except asyncio.TimeoutError:
+                    cli.print_error(f"  ⚠ {self.persona_name} connection timed out")
+                    raise
                 _persona_clients[self.persona_name] = client
                 _persona_usage[self.persona_name] = {"context_tokens": 0}
                 _persona_initialized[self.persona_name] = False
 
             return _persona_clients[self.persona_name]
 
-    async def _send_prompt(self, prompt: str) -> tuple[str, dict[str, Any] | None]:
+    async def _send_prompt(
+        self, prompt: str, timeout: float = 120.0
+    ) -> tuple[str, dict[str, Any] | None]:
         """Send a prompt and return (response_text, usage_stats)."""
+        if DEBUG_VERBOSITY >= 2:
+            print(f"    {self.persona_name}: getting client...", flush=True)
         client = await self._get_or_create_client()
+        if DEBUG_VERBOSITY >= 2:
+            print(f"    {self.persona_name}: sending query...", flush=True)
 
-        await client.query(prompt)
+        async def do_query_and_receive():
+            await client.query(prompt)
+            if DEBUG_VERBOSITY >= 2:
+                print(f"    {self.persona_name}: receiving response...", flush=True)
+            result_text = ""
+            usage = None
+            async for message in client.receive_response():
+                if isinstance(message, ResultMessage):
+                    result_text = message.result or ""
+                    usage = message.usage
+            return result_text, usage
 
-        result_text = ""
-        usage = None
-
-        async for message in client.receive_response():
-            if isinstance(message, ResultMessage):
-                result_text = message.result or ""
-                usage = message.usage
+        try:
+            result_text, usage = await asyncio.wait_for(
+                do_query_and_receive(), timeout=timeout
+            )
+        except asyncio.TimeoutError:
+            cli.print_error(f"  ⚠ {self.persona_name} timed out after {timeout}s")
+            return "", None
+        except Exception as e:
+            cli.print_error(f"  ⚠ {self.persona_name} error: {e}")
+            return "", None
 
         # Update token tracking
         if usage:
@@ -943,7 +966,19 @@ Write this as your internal thoughts, not a list."""
     async def _ensure_initialized(self):
         """Ensure session has received initial prompt."""
         if not _persona_initialized.get(self.persona_name, False):
+            if DEBUG_VERBOSITY >= 1:
+                print(
+                    cli.c("  ◇ ", cli.Colors.DIM)
+                    + cli.c(self.persona_name, self._get_persona_color())
+                    + cli.c(" initializing...", cli.Colors.DIM),
+                    flush=True,
+                )
             initial = build_initial_prompt(self.persona, self._compaction_summary)
+            if DEBUG_VERBOSITY >= 2:
+                print(
+                    cli.c(f"    prompt built ({len(initial)} chars)", cli.Colors.DIM),
+                    flush=True,
+                )
             await self._send_prompt(initial)
             _persona_initialized[self.persona_name] = True
             self._compaction_summary = None  # Clear after use
@@ -1496,11 +1531,10 @@ def find_tiles_for_location(
     return set()
 
 
-def _get_recent_memories(persona: Persona, limit: int = 15) -> str:
+def _get_recent_memories(persona: Persona) -> str:
     """Get formatted recent important memories for initial prompt.
 
-    Prioritizes TODAY's events (all of them) over older events.
-    For older events, uses importance/poignancy to select the most significant.
+    Deduplicates similar events and includes recent conversations.
     """
     if not hasattr(persona, "a_mem"):
         return ""
@@ -1511,20 +1545,18 @@ def _get_recent_memories(persona: Persona, limit: int = 15) -> str:
     curr_time = getattr(persona.scratch, "curr_time", None)
     today = curr_time.date() if curr_time else None
 
-    # Get recent conversations with full content
+    # Collect today's conversations (last few lines of each)
     if hasattr(persona.a_mem, "seq_chat") and persona.a_mem.seq_chat:
-        recent_chats = persona.a_mem.seq_chat[-5:]  # Last 5 conversations
+        recent_chats = persona.a_mem.seq_chat[-3:]  # Last 3 conversations
         for node in recent_chats:
             created = getattr(node, "created", None)
-            time_str = created.strftime("%B %d, %H:%M") if created else ""
-
-            # Get conversation content from filling
+            time_str = created.strftime("%H:%M") if created else ""
             filling = getattr(node, "filling", None)
             if filling and isinstance(filling, list) and len(filling) > 0:
                 partner = getattr(node, "object", "someone")
-                lines.append(f"- [{time_str}] Conversation with {partner}:")
-                for speaker, line in filling[-6:]:  # Last 6 lines of each convo
-                    lines.append(f'    {speaker}: "{line}"')
+                lines.append(f"[{time_str}] Conversation with {partner}:")
+                for speaker, line in filling[-4:]:  # Last 4 lines
+                    lines.append(f'  {speaker}: "{line}"')
 
     # Collect all events and thoughts
     all_nodes = []
@@ -1533,9 +1565,13 @@ def _get_recent_memories(persona: Persona, limit: int = 15) -> str:
     if hasattr(persona.a_mem, "seq_thought"):
         all_nodes.extend(persona.a_mem.seq_thought)
 
-    # Filter to nodes with required attributes
+    # Filter to nodes with required attributes and skip useless "is idle" object events
     all_nodes = [
-        n for n in all_nodes if hasattr(n, "poignancy") and hasattr(n, "description")
+        n
+        for n in all_nodes
+        if hasattr(n, "poignancy")
+        and hasattr(n, "description")
+        and "is idle" not in getattr(n, "description", "")
     ]
 
     # Separate today's events from older events
@@ -1552,21 +1588,29 @@ def _get_recent_memories(persona: Persona, limit: int = 15) -> str:
     # Sort today's events by time (chronological)
     today_nodes.sort(key=lambda n: getattr(n, "created", None) or datetime.datetime.min)
 
-    # Sort older events by importance, take top ones
-    older_nodes.sort(key=lambda n: n.poignancy, reverse=True)
-    older_nodes = older_nodes[:limit]
+    # Deduplicate today's events - keep first occurrence of similar descriptions
+    seen_prefixes = set()
+    deduped_today = []
+    for node in today_nodes:
+        desc = getattr(node, "description", "")
+        prefix = desc[:50]  # Use first 50 chars as similarity key
+        if prefix not in seen_prefixes:
+            seen_prefixes.add(prefix)
+            deduped_today.append(node)
+    today_nodes = deduped_today
 
-    # Add TODAY section if we have events
+    # Add TODAY section
     if today_nodes:
         lines.append("TODAY:")
         for node in today_nodes:
             desc = node.description
             created = getattr(node, "created", None)
-            if created and hasattr(created, "strftime"):
-                time_str = created.strftime("%H:%M")
-                lines.append(f"  - [{time_str}] {desc}")
-            else:
-                lines.append(f"  - {desc}")
+            time_str = created.strftime("%H:%M") if created else ""
+            lines.append(f"  [{time_str}] {desc}")
+
+    # Sort older events by importance, take top ones
+    older_nodes.sort(key=lambda n: n.poignancy, reverse=True)
+    older_nodes = older_nodes[:5]  # Reduced from limit
 
     # Add EARLIER MEMORIES section for important older events
     if older_nodes:
@@ -1575,10 +1619,10 @@ def _get_recent_memories(persona: Persona, limit: int = 15) -> str:
             desc = node.description
             created = getattr(node, "created", None)
             if created and hasattr(created, "strftime"):
-                time_str = created.strftime("%B %d, %H:%M")
-                lines.append(f"  - [{time_str}] {desc}")
+                time_str = created.strftime("%B %d")
+                lines.append(f"  [{time_str}] {desc}")
             else:
-                lines.append(f"  - {desc}")
+                lines.append(f"  {desc}")
 
     return "\n".join(lines) if lines else ""
 

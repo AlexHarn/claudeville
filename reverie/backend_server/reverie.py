@@ -6,7 +6,6 @@ File: reverie.py
 Description: Main program for running generative agent simulations.
 """
 
-import asyncio
 import datetime
 import json
 import math
@@ -477,12 +476,15 @@ class ReverieServer:
             )
 
         async def run_all_personas():
-            """Run all personas in parallel using asyncio.gather."""
-            tasks = [
-                run_persona_move(name, persona)
-                for name, persona in self.personas.items()
-            ]
-            return await asyncio.gather(*tasks)
+            """Run all personas sequentially to avoid SDK connection issues."""
+            # Note: Running sequentially for now due to Claude SDK handling
+            # multiple concurrent connections poorly. Can switch back to
+            # asyncio.gather once SDK improves.
+            results = []
+            for name, persona in self.personas.items():
+                result = await run_persona_move(name, persona)
+                results.append(result)
+            return results
 
         # Run all persona moves in parallel using the shared event loop
         # This ensures Flask thread uses the same loop as Claude SDK clients

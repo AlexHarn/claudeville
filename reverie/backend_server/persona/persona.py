@@ -145,6 +145,22 @@ class Persona:
             new_day, perceptions, nearby_personas, maze, personas
         )
         if skip_result:
+            # Log skipped personas for visibility
+            from persona.prompt_template.claude_structure import DEBUG_VERBOSITY
+            import cli_interface as cli
+
+            if DEBUG_VERBOSITY >= 1:
+                time_str = curr_time.strftime("%H:%M") if curr_time else ""
+                emoji = skip_result[1] if len(skip_result) > 1 else "⏳"
+                desc = skip_result[2] if len(skip_result) > 2 else "continuing"
+                # Truncate description for display
+                if len(desc) > 60:
+                    desc = desc[:57] + "..."
+                print(
+                    cli.c(f"  ○ {self.name}", cli.Colors.DIM)
+                    + cli.c(f" {time_str} ", cli.Colors.DIM)
+                    + cli.c(f"{emoji} {desc}", cli.Colors.DIM)
+                )
             # Return with had_llm_call=False
             return (*skip_result, False)
 

@@ -118,10 +118,10 @@ def perceive(persona, maze):
     for p_event in perceived_events:
         s, p, o, desc = p_event
         if not p:
-            # If the object is not present, then we default the event to "idle".
-            p = "is"
-            o = "idle"
-            desc = "idle"
+            # If the object is not present, then it's idle - skip logging these
+            # as they add noise to memory without providing useful information
+            continue
+
         desc = f"{s.split(':')[-1]} is {desc}"
         p_event = (s, p, o)
 
