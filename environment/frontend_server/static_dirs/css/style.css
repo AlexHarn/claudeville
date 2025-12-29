@@ -668,11 +668,15 @@ html, body {
 
 .chat-bubble.new .message {
   background: rgba(125, 216, 125, 0.25);
+}
+
+/* When fading class is added (on play resume), animate the fade */
+.chat-bubble.new.fading .message {
   animation: messageHighlight 1.5s ease-out forwards;
 }
 
 @keyframes messageHighlight {
-  0%, 30% {
+  0% {
     background: rgba(125, 216, 125, 0.25);
   }
   100% {

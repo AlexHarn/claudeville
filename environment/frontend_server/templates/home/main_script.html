@@ -62,6 +62,62 @@
 	let mainCamera = null;
 	let mapBounds = { width: 0, height: 0 };
 
+	// Day/night cycle
+	let nightOverlay = null;
+
+	function parseTimeString(timeStr) {
+		// Parse time like "February 13, 2024, 07:00:00" or "07:00 AM"
+		// Returns {hour, minute} in 24-hour format
+		const match = timeStr.match(/(\d{1,2}):(\d{2})(?::(\d{2}))?\s*(AM|PM)?/i);
+		if (!match) return { hour: 12, minute: 0 };  // Default to noon if can't parse
+
+		let hour = parseInt(match[1]);
+		const minute = parseInt(match[2]);
+		const ampm = match[4];
+
+		if (ampm) {
+			// 12-hour format
+			if (ampm.toUpperCase() === 'PM' && hour !== 12) hour += 12;
+			if (ampm.toUpperCase() === 'AM' && hour === 12) hour = 0;
+		}
+		// If no AM/PM, assume 24-hour format
+
+		return { hour, minute };
+	}
+
+	function calculateNightOpacity(hour, minute = 0) {
+		// Returns opacity 0-0.6 based on time of day with smooth 1-hour transitions
+		// Full day (no overlay): 7am - 6pm
+		// Transition (dawn): 6am - 7am (smooth fade)
+		// Transition (dusk): 6pm - 7pm (smooth fade)
+		// Full night: 7pm - 6am
+
+		const maxNight = 0.6;  // Maximum darkness at night
+		const hourFloat = hour + minute / 60;  // Include minutes for smooth transitions
+
+		if (hourFloat >= 7 && hourFloat < 18) {
+			// Daytime: no overlay
+			return 0;
+		} else if (hourFloat >= 6 && hourFloat < 7) {
+			// Dawn: fade from maxNight to 0 over 1 hour
+			return maxNight * (1 - (hourFloat - 6));
+		} else if (hourFloat >= 18 && hourFloat < 19) {
+			// Dusk: fade from 0 to maxNight over 1 hour
+			return maxNight * (hourFloat - 18);
+		} else {
+			// Night: full darkness
+			return maxNight;
+		}
+	}
+
+	function updateDayNightCycle(timeStr) {
+		if (!nightOverlay) return;
+
+		const { hour, minute } = parseTimeString(timeStr);
+		const targetOpacity = calculateNightOpacity(hour, minute);
+		nightOverlay.setAlpha(targetOpacity);
+	}
+
 	// Persona related variables
 	var spawn_tile_loc = {};
 	for (var key in persona_names){
@@ -72,6 +128,44 @@
 	var pronunciatios = {};
 	let anims_direction;
 	let pre_anims_direction_dict = {};
+
+	// Persona activity tracking for dynamic panel ordering
+	let personaLastActivity = {};  // { personaName: timestamp }
+
+	function updatePersonaActivity(personaNames) {
+		// Update activity timestamp for active personas
+		const now = Date.now();
+		for (const name of personaNames) {
+			personaLastActivity[name] = now;
+		}
+		reorderPersonaPanel();
+	}
+
+	function reorderPersonaPanel() {
+		const panelContent = document.querySelector('#persona-panel .panel-content');
+		if (!panelContent) return;
+
+		const cards = Array.from(panelContent.querySelectorAll('.persona-card'));
+		if (cards.length === 0) return;
+
+		// Sort cards by last activity (most recent first), then alphabetically for ties
+		cards.sort((a, b) => {
+			const nameA = a.getAttribute('data-persona-name');
+			const nameB = b.getAttribute('data-persona-name');
+			const activityA = personaLastActivity[nameA] || 0;
+			const activityB = personaLastActivity[nameB] || 0;
+
+			if (activityB !== activityA) {
+				return activityB - activityA;  // Most recent first
+			}
+			return nameA.localeCompare(nameB);  // Alphabetical fallback
+		});
+
+		// Reorder DOM elements
+		for (const card of cards) {
+			panelContent.appendChild(card);
+		}
+	}
 
 	let curr_maze = "the_ville";
 	let tile_width = 32;
@@ -210,8 +304,7 @@
 	}
 
 	function getAnimationDelay() {
-		// During skip mode, run at max speed (no delay)
-		if (isSkipping) return 0;
+		// Use selected speed for both normal and skip mode
 		// Scale delay: speed 1 = 400ms, speed 50 = 10ms
 		return Math.max(10, Math.floor(400 / playbackSpeed));
 	}
@@ -221,7 +314,9 @@
 			return true;
 		}
 
-		document.getElementById("game-time-content").innerHTML = execute_movement["meta"]["curr_time"];
+		const currTime = execute_movement["meta"]["curr_time"];
+		document.getElementById("game-time-content").innerHTML = currTime;
+		updateDayNightCycle(currTime);
 
 		for (let i = 0; i < Object.keys(personas).length; i++) {
 			let curr_persona_name = Object.keys(personas)[i];
@@ -234,10 +329,7 @@
 				movement_target[curr_persona_name] = [curr_x * tile_width, curr_y * tile_width];
 
 				let pronunciatio_content = execute_movement["persona"][curr_persona_name]["pronunciatio"];
-				let rgx = new RegExp(/(\p{L}{1})\p{L}+/, 'gu');
-				let initials = [...curr_persona_name.matchAll(rgx)] || [];
-				initials = ((initials.shift()?.[1] || '') + (initials.pop()?.[1] || '')).toUpperCase();
-				pronunciatios[curr_persona_name].setText(initials + ": " + pronunciatio_content);
+				pronunciatios[curr_persona_name].setText(pronunciatio_content);
 
 				let curr_persona_name_os = curr_persona_name.replace(/ /g, "_");
 				let description_content = execute_movement["persona"][curr_persona_name]["description"];
@@ -266,8 +358,8 @@
 				anims_direction = "";
 			}
 
-			curr_pronunciatio.x = curr_persona.body.x - 6;
-			curr_pronunciatio.y = curr_persona.body.y - 42 - 32;
+			curr_pronunciatio.x = curr_persona.body.x + 16;  // Center over sprite (sprite is 32px wide)
+			curr_pronunciatio.y = curr_persona.body.y - 42;  // Well above sprite head
 
 			let animKey = curr_persona.spriteKey || "misa";
 			if (anims_direction == "l") {
@@ -280,16 +372,32 @@
 				curr_persona.anims.play(animKey + "-front-walk", true);
 			} else {
 				curr_persona.anims.stop();
+
+				// Determine facing direction: face conversation partner if chatting
+				let facing_direction = pre_anims_direction_dict[curr_persona_name];
+				let chatting_with = execute_movement?.["persona"]?.[curr_persona_name]?.["chatting_with"];
+				if (chatting_with && personas[chatting_with]) {
+					let partner = personas[chatting_with];
+					let dx = partner.body.x - curr_persona.body.x;
+					let dy = partner.body.y - curr_persona.body.y;
+					// Face the direction with the larger difference
+					if (Math.abs(dx) > Math.abs(dy)) {
+						facing_direction = dx > 0 ? "r" : "l";
+					} else {
+						facing_direction = dy > 0 ? "d" : "u";
+					}
+				}
+
 				if (curr_persona.spriteKey) {
-					if (pre_anims_direction_dict[curr_persona_name] == "l") curr_persona.setFrame(4);
-					else if (pre_anims_direction_dict[curr_persona_name] == "r") curr_persona.setFrame(7);
-					else if (pre_anims_direction_dict[curr_persona_name] == "u") curr_persona.setFrame(10);
-					else if (pre_anims_direction_dict[curr_persona_name] == "d") curr_persona.setFrame(1);
+					if (facing_direction == "l") curr_persona.setFrame(4);
+					else if (facing_direction == "r") curr_persona.setFrame(7);
+					else if (facing_direction == "u") curr_persona.setFrame(10);
+					else if (facing_direction == "d") curr_persona.setFrame(1);
 				} else {
-					if (pre_anims_direction_dict[curr_persona_name] == "l") curr_persona.setTexture("atlas", "misa-left");
-					else if (pre_anims_direction_dict[curr_persona_name] == "r") curr_persona.setTexture("atlas", "misa-right");
-					else if (pre_anims_direction_dict[curr_persona_name] == "u") curr_persona.setTexture("atlas", "misa-back");
-					else if (pre_anims_direction_dict[curr_persona_name] == "d") curr_persona.setTexture("atlas", "misa-front");
+					if (facing_direction == "l") curr_persona.setTexture("atlas", "misa-left");
+					else if (facing_direction == "r") curr_persona.setTexture("atlas", "misa-right");
+					else if (facing_direction == "u") curr_persona.setTexture("atlas", "misa-back");
+					else if (facing_direction == "d") curr_persona.setTexture("atlas", "misa-front");
 				}
 			}
 		}
@@ -489,20 +597,27 @@
 
 	    personas[persona_name] = new_sprite;
 	    personas[persona_name].spriteKey = this.textures.exists(sprite_key) ? sprite_key : null;
+	    new_sprite.setDepth(2.3);  // Above foreground (2) but below emojis (2.4) and night overlay (2.5)
 
 	    // Initialize movement target to match spawn position
 	    movement_target[persona_name] = [start_pos[0], start_pos[1]];
 
-	    pronunciatios[persona_name] = this.add.text(
-	                                   new_sprite.body.x - 6,
-	                                   new_sprite.body.y - 42 - 32,
-	                                   "🦁", {
-	                                   font: "28px monospace",
-	                                   fill: "#000000",
-	                                   padding: { x: 8, y: 8},
-	                                   backgroundColor: "#ffffff",
-	                                   border:"solid",
-	                                   borderRadius:"10px"}).setDepth(3);
+	    // Create emoji display (no bubble, just the emoji with outline for visibility)
+	    const emojiText = this.add.text(
+	      new_sprite.body.x + 16,
+	      new_sprite.body.y - 42,
+	      "💭",
+	      {
+	        font: "18px sans-serif",
+	        resolution: 2,
+	        stroke: "#000000",
+	        strokeThickness: 3,
+	        shadow: { offsetX: 1, offsetY: 1, color: "#000000", blur: 2, fill: true }
+	      }
+	    );
+	    emojiText.setOrigin(0.5, 0.5);  // Center over sprite
+	    emojiText.setDepth(2.4);  // Below night overlay (2.5) so it gets darkened at night
+	    pronunciatios[persona_name] = emojiText;
 	  }
 
 	  // Fallback misa animations
@@ -529,6 +644,15 @@
 	    frames: anims.generateFrameNames("atlas", { prefix: "misa-back-walk.", start: 0, end: 3, zeroPad: 3 }),
 	    frameRate: 4,
 	    repeat: -1 });
+
+	  // Create day/night overlay (covers entire map, above all tile layers but below personas)
+	  // Uses a dark blue tint that fades based on time of day
+	  const graphics = this.add.graphics();
+	  graphics.fillStyle(0x0a0a20, 1);  // Darker blue-purple night color
+	  graphics.fillRect(0, 0, map.widthInPixels, map.heightInPixels);
+	  nightOverlay = graphics;
+	  nightOverlay.setDepth(2.5);  // Above foreground layers (depth 2) but below personas (depth 3)
+	  nightOverlay.setAlpha(0);   // Start with no overlay (daytime)
 	}
 
 
@@ -561,6 +685,14 @@
 
 	        // Update chat popup with conversation data
 	        updateChatPopup(result.movement);
+
+	        // Track persona activity for panel ordering
+	        if (result.hadNewAction) {
+	          const activePersonas = result.movement.meta?.active_personas || [];
+	          if (activePersonas.length > 0) {
+	            updatePersonaActivity(activePersonas);
+	          }
+	        }
 
 	        // During skip mode, check if this movement had an LLM action
 	        if (isSkipping && result.hadNewAction) {
@@ -619,6 +751,13 @@
 		isPaused = false;
 		isSkipping = false;
 		updateButtonStates();
+		// Fade out any "new" message highlights when resuming playback
+		document.querySelectorAll('.chat-bubble.new').forEach(bubble => {
+			bubble.classList.add('fading');
+			setTimeout(() => {
+				bubble.classList.remove('new', 'fading');
+			}, 1500);
+		});
 	});
 
 	// Pause button
@@ -632,6 +771,31 @@
 	document.getElementById("skip_button").addEventListener("click", function() {
 		if (!isSkipping) {
 			startSkipMode();
+		}
+	});
+
+	// Spacebar hotkey: toggle skip mode / pause
+	document.addEventListener("keydown", function(e) {
+		// Ignore if typing in a text input field (but allow range sliders)
+		if (e.target.tagName === 'TEXTAREA') return;
+		if (e.target.tagName === 'INPUT' && e.target.type !== 'range') return;
+		// Ignore if menu is open
+		if (isMenuOpen()) return;
+
+		if (e.code === "Space") {
+			e.preventDefault();  // Prevent page scroll and slider interaction
+			// Blur any focused element so spacebar doesn't affect it
+			if (document.activeElement) document.activeElement.blur();
+
+			if (isSkipping || !isPaused) {
+				// Currently running (skipping or playing) - pause
+				isPaused = true;
+				isSkipping = false;
+				updateButtonStates();
+			} else {
+				// Currently paused - start skip mode
+				startSkipMode();
+			}
 		}
 	});
 
@@ -876,7 +1040,9 @@
 				displayedMessageKeys.add(key);
 
 				const bubble = document.createElement('div');
-				bubble.className = 'chat-bubble new';
+				// Only highlight as "new" if simulation is paused (skip ahead was used)
+				// When playing, messages flow naturally so no highlight needed
+				bubble.className = isPaused ? 'chat-bubble new' : 'chat-bubble';
 				bubble.innerHTML = `
 					<span class="speaker">${speaker}</span>
 					<span class="message">${line}</span>
@@ -884,8 +1050,12 @@
 				chatMessages.appendChild(bubble);
 				addedNew = true;
 
-				// Remove 'new' highlight after animation
-				setTimeout(() => bubble.classList.remove('new'), 1500);
+				// If paused, keep highlight until playback resumes
+				// If playing, fade out after animation completes
+				if (!isPaused) {
+					// No highlight when playing - messages flow naturally
+				}
+				// Note: 'new' class removal when unpausing is handled in play button handler
 			}
 		}
 

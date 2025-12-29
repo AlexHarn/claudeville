@@ -53,16 +53,17 @@ def c(text, *styles):
 def print_header():
     """Print the Claudeville header."""
     print()
+    # Box width: 65 characters inside (between ║ and ║)
     print(
         c(
-            "╔═══════════════════════════════════════════════════════════════╗",
+            "╔" + "═" * 65 + "╗",
             Colors.CYAN,
         )
     )
     print(
         c("║", Colors.CYAN)
         + c(
-            "             CLAUDEVILLE SIMULATION ENGINE                    ",
+            "CLAUDEVILLE SIMULATION ENGINE".center(65),
             Colors.BRIGHT_WHITE,
             Colors.BOLD,
         )
@@ -70,14 +71,12 @@ def print_header():
     )
     print(
         c("║", Colors.CYAN)
-        + c(
-            "        Generative Agents powered by Claude CLI               ", Colors.DIM
-        )
+        + c("Generative Agents powered by Claude CLI".center(65), Colors.DIM)
         + c("║", Colors.CYAN)
     )
     print(
         c(
-            "╚═══════════════════════════════════════════════════════════════╝",
+            "╚" + "═" * 65 + "╝",
             Colors.CYAN,
         )
     )

@@ -19,16 +19,18 @@ class PathFinder:
     between points while avoiding collision blocks.
     """
 
-    def __init__(self, maze: list, collision_block_id: str):
+    def __init__(self, maze: list, collision_block_id: str, extra_blocked: set = None):
         """
         Initialize PathFinder with a maze and collision block identifier.
 
         Args:
             maze: 2D list representing the maze grid
             collision_block_id: Character/value identifying impassable blocks
+            extra_blocked: Optional set of (x, y) tiles to treat as blocked
         """
         self.maze = maze
         self.collision_block_id = collision_block_id
+        self.extra_blocked = extra_blocked or set()
 
     def find_path(self, start: tuple, end: tuple) -> list:
         """
@@ -111,10 +113,15 @@ class PathFinder:
         """
         # Build collision map (1 = blocked, 0 = passable)
         collision_map = []
-        for row in self.maze:
+        for row_idx, row in enumerate(self.maze):
             new_row = []
-            for cell in row:
-                if cell == self.collision_block_id:
+            for col_idx, cell in enumerate(row):
+                # Check base collision and extra blocked tiles
+                # Note: extra_blocked uses (x, y) format, maze uses (row, col) = (y, x)
+                if (
+                    cell == self.collision_block_id
+                    or (col_idx, row_idx) in self.extra_blocked
+                ):
                     new_row.append(1)
                 else:
                     new_row.append(0)

@@ -16,6 +16,39 @@ from path_finder import PathFinder
 from utils import collision_block_id
 
 import cli_interface as cli
+
+# Objects that personas should stand ON (sit/lie down)
+# For all other objects, personas should stand NEXT TO them
+OCCUPIABLE_OBJECTS = {
+    "bed",
+    "beds",
+    "chair",
+    "chairs",
+    "couch",
+    "couches",
+    "sofa",
+    "sofas",
+    "bench",
+    "benches",
+    "armchair",
+    "armchairs",
+    "stool",
+    "stools",
+    "recliner",
+    "recliners",
+    "loveseat",
+    "loveseats",
+    "futon",
+    "futons",
+    "hammock",
+    "hammocks",
+    "mat",
+    "mats",
+    "yoga mat",
+    "meditation mat",
+    "sleeping bag",
+    "cot",
+}
 from persona.cognitive_modules.perceive import perceive
 from persona.memory_structures.associative_memory import AssociativeMemory
 from persona.memory_structures.scratch import Scratch
@@ -768,6 +801,55 @@ class Persona:
 
         return (next_tile, action.emoji, description)
 
+    def _is_occupiable_object(self, object_name):
+        """Check if an object is one that personas should stand/sit/lie ON."""
+        if not object_name:
+            return False
+        obj_lower = object_name.lower().strip()
+        # Check exact match first
+        if obj_lower in OCCUPIABLE_OBJECTS:
+            return True
+        # Check if any occupiable keyword is in the object name
+        for occupiable in OCCUPIABLE_OBJECTS:
+            if occupiable in obj_lower:
+                return True
+        return False
+
+    def _get_center_tile(self, tiles):
+        """Get the center tile from a set of tiles."""
+        if not tiles:
+            return None
+        tiles_list = list(tiles)
+        if len(tiles_list) == 1:
+            return tiles_list[0]
+        # Calculate center
+        avg_x = sum(t[0] for t in tiles_list) / len(tiles_list)
+        avg_y = sum(t[1] for t in tiles_list) / len(tiles_list)
+        # Find the tile closest to the center
+        return min(tiles_list, key=lambda t: (t[0] - avg_x) ** 2 + (t[1] - avg_y) ** 2)
+
+    def _get_adjacent_walkable_tiles(self, object_tiles, maze):
+        """
+        Get walkable tiles adjacent to the object tiles.
+        Returns tiles where a persona can stand to interact with the object.
+        """
+        adjacent = set()
+        for tile in object_tiles:
+            x, y = tile
+            # Check 4 cardinal directions (not diagonals)
+            for dx, dy in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
+                adj_x, adj_y = x + dx, y + dy
+                # Check bounds
+                if 0 <= adj_y < len(maze.collision_maze) and 0 <= adj_x < len(
+                    maze.collision_maze[0]
+                ):
+                    # Check if walkable (no collision)
+                    if maze.collision_maze[adj_y][adj_x] == "0":
+                        # Don't include tiles that are part of the object itself
+                        if (adj_x, adj_y) not in object_tiles:
+                            adjacent.add((adj_x, adj_y))
+        return list(adjacent)
+
     def _resolve_location_to_tile(self, act_address, maze, personas):
         """
         Resolve an action address to tile coordinates.
@@ -838,16 +920,14 @@ class Persona:
                 print(f"    [LOC] {self.name}: Already at target, staying in place")
             return self.scratch.curr_tile
 
-        # Need to find a path to the target location
-        path_finder = PathFinder(maze.collision_maze, collision_block_id)
-
-        # Check for special address types
+        # Check for special address types (these use basic pathfinding)
         if "<persona>" in act_address:
             # Moving to interact with another persona
             target_name = act_address.split("<persona>")[-1].strip()
             if target_name in personas:
                 target_tile = personas[target_name].scratch.curr_tile
-                path = path_finder.find_path(self.scratch.curr_tile, target_tile)
+                pf = PathFinder(maze.collision_maze, collision_block_id)
+                path = pf.find_path(self.scratch.curr_tile, target_tile)
                 if len(path) > 1:
                     self.scratch.planned_path = path[1:]
                     self.scratch.act_path_set = True
@@ -864,21 +944,46 @@ class Persona:
             act_address = clean_address
 
         # Standard location resolution
-        target_tiles = None
+        object_tiles = None
         if act_address in maze.address_tiles:
-            target_tiles = list(maze.address_tiles[act_address])
+            object_tiles = set(maze.address_tiles[act_address])
         else:
             # Try partial address matching (without object)
             parts = act_address.split(":")
             for i in range(len(parts), 0, -1):
                 partial = ":".join(parts[:i])
                 if partial in maze.address_tiles:
-                    target_tiles = list(maze.address_tiles[partial])
+                    object_tiles = set(maze.address_tiles[partial])
                     break
 
-        if not target_tiles:
+        if not object_tiles:
             # Fallback: stay in place
             return self.scratch.curr_tile
+
+        # Extract object name from address (last part after the last colon)
+        parts = act_address.split(":")
+        object_name = parts[-1] if len(parts) >= 4 else ""
+
+        # Determine target tiles and pathfinding strategy based on object type
+        is_occupiable = self._is_occupiable_object(object_name)
+
+        if is_occupiable:
+            # For beds, chairs, etc. - target the center of the object
+            center_tile = self._get_center_tile(object_tiles)
+            target_tiles = [center_tile] if center_tile else list(object_tiles)
+            # No extra blocked tiles - can walk onto the object
+            extra_blocked = set()
+        else:
+            # For other objects - find adjacent walkable tiles
+            adjacent_tiles = self._get_adjacent_walkable_tiles(object_tiles, maze)
+            if adjacent_tiles:
+                target_tiles = adjacent_tiles
+                # Block the object tiles so we don't path through them
+                extra_blocked = object_tiles
+            else:
+                # Fallback to object tiles if no adjacent walkable tiles found
+                target_tiles = list(object_tiles)
+                extra_blocked = set()
 
         # Sample a few target tiles and pick the closest unoccupied one
         if len(target_tiles) > 4:
@@ -895,6 +1000,9 @@ class Persona:
 
         if unoccupied_tiles:
             target_tiles = unoccupied_tiles
+
+        # Create pathfinder with extra blocked tiles for non-occupiable objects
+        path_finder = PathFinder(maze.collision_maze, collision_block_id, extra_blocked)
 
         # Find path to nearest target tile
         path, closest_tile = path_finder.find_path_to_nearest(
