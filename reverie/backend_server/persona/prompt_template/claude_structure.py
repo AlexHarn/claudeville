@@ -117,6 +117,7 @@ _persona_usage: dict[str, dict[str, Any]] = {}
 _persona_initialized: dict[str, bool] = {}
 _persona_colors: dict[str, str] = {}  # Assigned colors per persona
 
+
 # Available colors for personas (assigned in order of registration)
 PERSONA_COLORS = [
     cli.Colors.BRIGHT_CYAN,
@@ -295,9 +296,13 @@ Required fields: social
 Optional fields: continuing (default false), action (required if continuing is false), thoughts, schedule_update
 
 === CONVERSATIONS ===
-When interacting with someone nearby:
+CRITICAL: You can ONLY talk to people listed under "NEARBY PEOPLE" above!
+- If NEARBY PEOPLE shows "(no one nearby)", you CANNOT start a conversation
+- If someone you expected to see isn't listed, they are NOT here - don't pretend they are
+
+When interacting with someone in NEARBY PEOPLE:
 - Set wants_to_talk: true
-- Set target: their name (or a list of names for group address)
+- Set target: their EXACT name from the NEARBY PEOPLE list
 - Set conversation_line: what you actually SAY to them (dialogue in quotes)
 
 Examples:
@@ -315,7 +320,7 @@ NATURAL CONVERSATION FLOW:
 
 GROUP ADDRESSING (lectures, announcements, etc):
 - Use a list of names when speaking to multiple people: "target": ["Student1", "Student2", "Student3"]
-- All listed people will be included in the conversation group
+- All names MUST be from the NEARBY PEOPLE list
 - Any of them can respond back to you
 
 === REALITY RULES ===
@@ -330,6 +335,7 @@ DO NOT roleplay or pretend things are happening when they're not. You must base 
 - If you planned to "attend class" but NO professor or students are around, you can't attend class. You might wait briefly, then find something else to do.
 - If you work at a cafe and NO customers have come in, acknowledge it's slow. Don't pretend you're "finishing up the morning rush" - be honest that it's quiet.
 - If you have a meeting scheduled for 4pm but it's only 1pm, DON'T go there early and wait for 3 hours. Find something productive to do until closer to the time.
+- If you expected to meet someone but they're NOT in NEARBY PEOPLE, they're not here. React naturally: wait, look around, find something else to do.
 - If you try to talk to someone and they don't respond after a reasonable wait, they may be busy or uninterested. React naturally - you might feel awkward, try once more, or give up.
 
 Your inner thoughts should reflect ACTUAL reality, not what you expected/hoped would happen.
@@ -339,6 +345,9 @@ GOOD: "It's been really quiet this morning. I wonder where everyone is."
 
 BAD: Walking to a 4pm meeting at 1pm
 GOOD: "The meeting isn't until 4pm. I have a few hours - maybe I'll read or take a walk first."
+
+BAD: Greeting Isabella at the cafe (when NEARBY PEOPLE doesn't list her)
+GOOD: "Hmm, Isabella isn't here. I wonder where she went."
 
 === EVENT TRIPLE FORMAT ===
 The "event" field describes your action as [subject, verb, object]:
@@ -901,10 +910,33 @@ class UnifiedPersonaClient:
                 print(f"    {self.persona_name}: receiving response...", flush=True)
             result_text = ""
             usage = None
+            msg_count = 0
+            last_event_type = None
             async for message in client.receive_response():
+                msg_count += 1
+                msg_type = type(message).__name__
+                # Log every 10th message or type changes to avoid spam
+                if DEBUG_VERBOSITY >= 2 and (
+                    msg_count <= 3 or msg_type != last_event_type
+                ):
+                    print(
+                        f"    {self.persona_name}: msg #{msg_count} {msg_type}",
+                        flush=True,
+                    )
+                last_event_type = msg_type
                 if isinstance(message, ResultMessage):
                     result_text = message.result or ""
                     usage = message.usage
+                    if DEBUG_VERBOSITY >= 2:
+                        print(
+                            f"    {self.persona_name}: got result ({len(result_text)} chars)",
+                            flush=True,
+                        )
+            if DEBUG_VERBOSITY >= 2:
+                print(
+                    f"    {self.persona_name}: finished receiving ({msg_count} messages total)",
+                    flush=True,
+                )
             return result_text, usage
 
         try:
@@ -1658,6 +1690,22 @@ def _format_remaining_schedule(scratch) -> str:
 def get_persona_client(persona: Persona) -> UnifiedPersonaClient:
     """Get or create a UnifiedPersonaClient for a persona."""
     return UnifiedPersonaClient(persona)
+
+
+async def _initialize_all_personas(personas: dict[str, Persona]):
+    """Initialize all persona sessions in parallel (rate limited by semaphore)."""
+
+    async def init_one(persona):
+        client = UnifiedPersonaClient(persona)
+        await client._ensure_initialized()
+
+    tasks = [init_one(p) for p in personas.values()]
+    await asyncio.gather(*tasks, return_exceptions=True)
+
+
+def initialize_all_personas_sync(personas: dict[str, Persona]):
+    """Initialize all persona sessions in parallel (sync wrapper)."""
+    _run_async(_initialize_all_personas(personas))
 
 
 def get_client_stats() -> dict[str, Any]:

@@ -62,7 +62,7 @@ def print_header():
     print(
         c("║", Colors.CYAN)
         + c(
-            "              CLAUDEVILLE SIMULATION ENGINE                   ",
+            "             CLAUDEVILLE SIMULATION ENGINE                    ",
             Colors.BRIGHT_WHITE,
             Colors.BOLD,
         )
@@ -71,7 +71,7 @@ def print_header():
     print(
         c("║", Colors.CYAN)
         + c(
-            "         Generative Agents powered by Claude CLI              ", Colors.DIM
+            "        Generative Agents powered by Claude CLI               ", Colors.DIM
         )
         + c("║", Colors.CYAN)
     )
@@ -139,7 +139,11 @@ def print_help():
     )
     print(
         c("│", Colors.BRIGHT_BLACK)
-        + f"    {c('quit', Colors.RED)}              Exit without saving"
+        + f"    {c('quit', Colors.YELLOW)}              Exit without saving (keeps last save)"
+    )
+    print(
+        c("│", Colors.BRIGHT_BLACK)
+        + f"    {c('discard', Colors.RED)}           Delete simulation entirely"
     )
     print(c("│", Colors.BRIGHT_BLACK))
     print(

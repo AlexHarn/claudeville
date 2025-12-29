@@ -246,9 +246,28 @@ class Persona:
         curr_address = self.scratch.act_address or ""
 
         # === WALKING ===
-        # If we have a planned path, continue walking (even if personas nearby -
-        # we'll interact when we arrive)
+        # If we have a planned path, continue walking unless:
+        # 1. Someone new enters our field of view (potential social interaction)
+        # 2. Someone talks to us (dialogue we should respond to)
         if self.scratch.act_path_set and self.scratch.planned_path:
+            # Check if anyone nearby has said something we should respond to
+            if self._has_unheard_dialogue(nearby_personas, personas):
+                # Clear the old path so LLM's new decision can set a new destination
+                self.scratch.planned_path = []
+                self.scratch.act_path_set = False
+                return None
+
+            # Check if there's a NEW person nearby we haven't acknowledged
+            # This allows the LLM to decide whether to greet them or keep walking
+            if nearby_personas:
+                current_nearby = set(nearby_personas)
+                new_people = current_nearby - self._acknowledged_nearby
+                if new_people:
+                    # New person detected - stop and let LLM decide
+                    self.scratch.planned_path = []
+                    self.scratch.act_path_set = False
+                    return None
+
             next_tile = self.scratch.planned_path[0]
             self.scratch.planned_path = self.scratch.planned_path[1:]
             return (next_tile, curr_emoji, f"{curr_action} @ {curr_address}")
@@ -266,6 +285,12 @@ class Persona:
                     # New activity detected - call LLM to decide response
                     # (After LLM call, we'll update _acknowledged_nearby)
                     return None
+
+                # Check if anyone nearby has said something we should respond to
+                # This ensures conversations continue naturally
+                if self._has_unheard_dialogue(nearby_personas, personas):
+                    return None
+
                 # All nearby activity already acknowledged - continue current action
             return self._continue_current_action(curr_emoji, curr_action, curr_address)
 
@@ -285,6 +310,53 @@ class Persona:
             self.scratch.curr_time - self.scratch.act_start_time
         ).total_seconds() / 60
         return elapsed < self.scratch.act_duration
+
+    def _has_unheard_dialogue(self, nearby_personas, personas) -> bool:
+        """
+        Check if any nearby persona has said something we should respond to.
+
+        Returns True if:
+        1. There's dialogue we haven't heard yet, OR
+        2. The last message in our conversation was from someone else (it's our turn)
+
+        Args:
+            nearby_personas: List of (name, activity) tuples for currently nearby personas
+            personas: Dict of all personas
+        """
+        # Get our current chat
+        my_chat = self.scratch.chat or []
+
+        # Check if it's our turn to respond (last message wasn't from us)
+        if my_chat:
+            last_entry = my_chat[-1]
+            if isinstance(last_entry, (list, tuple)) and len(last_entry) >= 2:
+                last_speaker = last_entry[0]
+                if last_speaker != self.name:
+                    # Someone else spoke last - it's our turn to respond
+                    return True
+
+        # Also check for completely new dialogue we haven't heard
+        my_chat_set = set()
+        for entry in my_chat:
+            if isinstance(entry, (list, tuple)) and len(entry) >= 2:
+                my_chat_set.add((entry[0], entry[1]))
+
+        # Check each nearby persona for new dialogue
+        for name, _ in nearby_personas:
+            if name not in personas or name == self.name:
+                continue
+
+            other_scratch = personas[name].scratch
+            other_chat = other_scratch.chat or []
+
+            for entry in other_chat:
+                if isinstance(entry, (list, tuple)) and len(entry) >= 2:
+                    speaker, line = entry[0], entry[1]
+                    # If someone else said something we haven't heard, trigger LLM
+                    if speaker != self.name and (speaker, line) not in my_chat_set:
+                        return True
+
+        return False
 
     def _continue_current_action(self, emoji, description, address):
         """Return execution tuple for continuing current action without LLM call."""
@@ -356,6 +428,10 @@ class Persona:
         """
         Get list of (name, activity_key) tuples for nearby personas.
 
+        Only includes personas that are:
+        1. Within vision range (vision_r tiles)
+        2. Have clear line of sight (no walls blocking)
+
         The activity_key is (predicate, object) from the action triplet,
         which is more stable than the full description for detecting
         genuinely new activities vs just rephrased descriptions.
@@ -366,6 +442,10 @@ class Persona:
         )
 
         for tile in nearby_tiles:
+            # Skip tiles without line of sight (walls in the way)
+            if not maze.has_line_of_sight(self.scratch.curr_tile, tile):
+                continue
+
             tile_details = maze.access_tile(tile)
             if tile_details.get("events"):
                 for event in tile_details["events"]:
@@ -615,6 +695,12 @@ class Persona:
                         f"(missing: {missing_targets})"
                     )
 
+                # CRITICAL: Stop walking when starting a conversation!
+                # Otherwise we might walk out of range before message is delivered
+                if self.scratch.planned_path:
+                    self.scratch.planned_path = []
+                    self.scratch.act_path_set = False
+
                 # Starting or continuing a conversation
                 # For chatting_with, use first target (primary addressee)
                 chatting_with = nearby_targets[0]
@@ -669,8 +755,13 @@ class Persona:
         # Store any thoughts from the response
         self._store_thoughts(step_response.thoughts)
 
-        # Resolve location to tile coordinates (adapted from execute.py)
-        next_tile = self._resolve_location_to_tile(act_address, maze, personas)
+        # If starting a conversation, stay in place instead of walking away
+        # The conversation takes priority over the action destination
+        if chatting_with:
+            next_tile = self.scratch.curr_tile
+        else:
+            # Resolve location to tile coordinates (adapted from execute.py)
+            next_tile = self._resolve_location_to_tile(act_address, maze, personas)
 
         # Build description string
         description = f"{action.description} @ {act_address}"
@@ -688,6 +779,23 @@ class Persona:
             ret = self.scratch.planned_path[0]
             self.scratch.planned_path = self.scratch.planned_path[1:]
             return ret
+
+        # If in conversation, move towards conversation partner if not nearby
+        if self.scratch.chatting_with and self.scratch.chatting_with in personas:
+            partner = personas[self.scratch.chatting_with]
+            partner_tile = partner.scratch.curr_tile
+            dist = max(
+                abs(self.scratch.curr_tile[0] - partner_tile[0]),
+                abs(self.scratch.curr_tile[1] - partner_tile[1]),
+            )
+            # If more than 2 tiles away, move towards partner
+            if dist > 2:
+                path_finder = PathFinder(maze.collision_maze, collision_block_id)
+                path = path_finder.find_path(self.scratch.curr_tile, partner_tile)
+                if path and len(path) > 1:
+                    self.scratch.planned_path = path[1:]
+                    self.scratch.act_path_set = True
+                    return path[1]
 
         # Check if we're already at the target location - stay in place
         # This prevents unnecessary movement when doing the same activity

@@ -96,10 +96,12 @@ class ConversationGroup:
 
 
 def _tile_distance(tile1: tuple, tile2: tuple) -> float:
-    """Calculate Euclidean distance between two tiles."""
+    """Calculate Chebyshev distance between two tiles (consistent with perception)."""
     if not tile1 or not tile2:
         return float("inf")
-    return math.sqrt((tile1[0] - tile2[0]) ** 2 + (tile1[1] - tile2[1]) ** 2)
+    # Chebyshev distance: max of absolute differences (square radius, not circular)
+    # This matches how perception uses get_nearby_tiles which checks a square area
+    return max(abs(tile1[0] - tile2[0]), abs(tile1[1] - tile2[1]))
 
 
 def _are_within_range(tile1: tuple, tile2: tuple, vision_r: int = 4) -> bool:
@@ -237,6 +239,13 @@ class ReverieServer:
             self.maze.tiles[p_y][p_x]["events"].add(
                 curr_persona.scratch.get_curr_event_and_desc()
             )
+
+        # Initialize all persona sessions in parallel (avoids delays later)
+        from persona.prompt_template.claude_structure import (
+            initialize_all_personas_sync,
+        )
+
+        initialize_all_personas_sync(self.personas)
 
         # REVERIE SETTINGS PARAMETERS:
         # <server_sleep> denotes the amount of time that our while loop rests each
@@ -535,11 +544,17 @@ class ReverieServer:
 
             traceback.print_exc()
 
-        # Update movements with synchronized chat data
+        # Update movements with synchronized chat data and conversation partner
         # This ensures frontend receives the complete merged conversation
         for name, persona in self.personas.items():
-            if name in movements["persona"] and persona.scratch.chat:
-                movements["persona"][name]["chat"] = persona.scratch.chat
+            if name in movements["persona"]:
+                if persona.scratch.chat:
+                    movements["persona"][name]["chat"] = persona.scratch.chat
+                # Add conversation partner for sprite facing direction
+                if persona.scratch.chatting_with:
+                    movements["persona"][name][
+                        "chatting_with"
+                    ] = persona.scratch.chatting_with
 
         # Add meta information (step is sent BEFORE increment so frontend knows what step this was)
         movements["meta"]["curr_time"] = self.curr_time.strftime("%B %d, %Y, %H:%M:%S")
@@ -588,19 +603,29 @@ class ReverieServer:
         This is critical because personas run in parallel and don't see each
         other's dialogue responses within a single simulation step.
         """
-        # Conversation range - larger than vision_r since people can chat across a room
-        CONVERSATION_RANGE = 10
+        # Perception range for initiating conversations (must see target) = vision_r = 4
+        # Delivery range is slightly larger to account for movement during parallel execution.
+        # A persona decides to talk based on their position when LLM was called, but
+        # validation happens after moves complete - both parties may have moved 1 tile.
+        CONVERSATION_DELIVERY_RANGE = 6
 
         def can_converse(tile1, tile2) -> bool:
-            """Check if two tiles are within conversation range AND have line of sight."""
+            """Check if two tiles are within conversation delivery range AND have line of sight."""
             if not tile1 or not tile2:
                 return False
-            if _tile_distance(tile1, tile2) > CONVERSATION_RANGE:
+            if _tile_distance(tile1, tile2) > CONVERSATION_DELIVERY_RANGE:
                 return False
             return self.maze.has_line_of_sight(tile1, tile2)
 
-        # Step 0: Remove out-of-range participants from existing groups
+        # Step 0: Collect who is actively chatting FIRST, before any range checks
+        # We need this to know who's still engaged before deciding to kick anyone
+        active_chatters_quick = set()  # Names of personas who are actively talking
+        for name, persona in self.personas.items():
+            if persona.scratch.chatting_with and persona.scratch.chat:
+                active_chatters_quick.add(name)
 
+        # Step 0b: Remove out-of-range participants from existing groups
+        # BUT only if they're not actively chatting (still engaged in conversation)
         for group_id, group in list(self.active_conversations.items()):
             if len(group.participants) < 2:
                 continue
@@ -610,6 +635,11 @@ class ReverieServer:
             for participant in group.participants:
                 if participant not in self.personas:
                     to_remove.append(participant)
+                    continue
+
+                # If this participant is actively chatting this step, don't remove them
+                # They're still engaged even if positions shifted during parallel execution
+                if participant in active_chatters_quick:
                     continue
 
                 my_tile = self.personas_tile.get(participant)
@@ -655,6 +685,16 @@ class ReverieServer:
                     persona.scratch.chat or [],
                 )
 
+        # Detect mutual encounters (both greeted each other on same step)
+        # This is fine - we'll merge their messages into one conversation
+        mutual_encounters = set()
+        for name, (partner, _) in active_chatters.items():
+            if partner in active_chatters and active_chatters[partner][0] == name:
+                pair = tuple(sorted([name, partner]))
+                if pair not in mutual_encounters:
+                    mutual_encounters.add(pair)
+                    cli.print_info(f"  Mutual encounter: {name} <-> {partner}")
+
         # Step 3: Find or create conversation groups (with proximity validation)
         for name, (partner, chat_lines) in active_chatters.items():
             group = None
@@ -667,37 +707,20 @@ class ReverieServer:
                 group = self.active_conversations.get(group_id)
 
             # Check if partner is already in a group we should join
-            # BUT only if we're within range of them (distance + line of sight)
+            # Trust the LLM's decision - it validated proximity when deciding to talk
             if not group and partner in persona_to_group:
-                partner_tile = self.personas_tile.get(partner)
-                if can_converse(my_tile, partner_tile):
-                    group_id = persona_to_group[partner]
-                    group = self.active_conversations.get(group_id)
-                    if group:
-                        group.add_participant(name)
-                        persona_to_group[name] = group_id
-                        # Update persona's group reference
-                        self.personas[name].scratch.conversation_group_id = group_id
-                else:
-                    # Partner too far away or blocked by wall
-                    cli.print_info(
-                        f"  {name} tried to chat with {partner} but they're too far away"
-                    )
-                    self._end_and_store_conversation(self.personas[name])
-                    continue
+                group_id = persona_to_group[partner]
+                group = self.active_conversations.get(group_id)
+                if group:
+                    group.add_participant(name)
+                    persona_to_group[name] = group_id
+                    # Update persona's group reference
+                    self.personas[name].scratch.conversation_group_id = group_id
 
             # Create new group if neither is in one
             if not group:
-                # Validate partner is within range before creating group
-                partner_tile = self.personas_tile.get(partner)
-                if partner in self.personas and not can_converse(my_tile, partner_tile):
-                    # Can't start conversation - partner too far or blocked
-                    cli.print_info(
-                        f"  {name} tried to chat with {partner} but they're too far away"
-                    )
-                    self._end_and_store_conversation(self.personas[name])
-                    continue
-
+                # Trust the LLM's decision to initiate - it validated proximity when deciding
+                # Don't re-check distance here as positions may have changed during parallel execution
                 group = ConversationGroup(
                     participants={name},
                     location_tile=self.personas_tile.get(name, (0, 0)),
@@ -779,22 +802,30 @@ class ReverieServer:
             )
 
         # Step 5: Handle one-sided conversations (A talks to B, B hasn't responded)
-        # Only initiate if both are within range
+        # Validate proximity before delivering - LLM may hallucinate nearby personas
         for name, (partner, chat_lines) in active_chatters.items():
             if partner not in self.personas:
                 continue
 
+            persona_a = self.personas[name]
             persona_b = self.personas[partner]
 
-            # If B isn't chatting yet, set them up to respond (if within range)
+            # Validate partner is actually within conversation delivery range
+            tile_a = self.personas_tile.get(name)
+            tile_b = self.personas_tile.get(partner)
+            if not _are_within_range(tile_a, tile_b, CONVERSATION_DELIVERY_RANGE):
+                cli.print_warning(
+                    f"  {name} tried to talk to {partner} but they're "
+                    f"not nearby (distance: {_tile_distance(tile_a, tile_b):.0f} tiles) - ignoring"
+                )
+                # Clear A's conversation state since target isn't reachable
+                persona_a.scratch.chatting_with = None
+                persona_a.scratch.chat = None
+                persona_a.scratch.chatting_with_buffer = {}
+                continue
+
+            # If B isn't chatting yet, set them up to receive and respond
             if not persona_b.scratch.chatting_with and chat_lines:
-                my_tile = self.personas_tile.get(name)
-                partner_tile = self.personas_tile.get(partner)
-
-                if not can_converse(my_tile, partner_tile):
-                    # Too far apart or blocked by wall
-                    continue
-
                 persona_b.scratch.chatting_with = name
                 persona_b.scratch.chat = []
                 persona_b.scratch.merge_chat_lines(chat_lines)
@@ -802,7 +833,6 @@ class ReverieServer:
                     name: persona_b.scratch.vision_r
                 }
 
-                persona_a = self.personas[name]
                 if persona_a.scratch.chatting_end_time:
                     persona_b.scratch.chatting_end_time = (
                         persona_a.scratch.chatting_end_time
@@ -811,6 +841,15 @@ class ReverieServer:
                     persona_b.scratch.chatting_end_time = (
                         self.curr_time + datetime.timedelta(minutes=5)
                     )
+
+                # Also add B to the conversation group so it's properly tracked
+                if name in persona_to_group:
+                    group_id = persona_to_group[name]
+                    group = self.active_conversations.get(group_id)
+                    if group and partner not in group.participants:
+                        group.add_participant(partner)
+                        persona_to_group[partner] = group_id
+                        persona_b.scratch.conversation_group_id = group_id
 
                 cli.print_info(
                     f"  Initiated conversation: {name} -> {partner} "
@@ -1168,7 +1207,11 @@ class ReverieServer:
                         cli.print_success("Simulation saved.")
 
                 elif cmd == "quit":
-                    cli.print_warning("Exiting without saving...")
+                    cli.print_warning("Exiting without saving current state...")
+                    break
+
+                elif cmd == "discard":
+                    cli.print_warning("Discarding simulation and deleting all data...")
                     shutil.rmtree(sim_folder)
                     break
 
