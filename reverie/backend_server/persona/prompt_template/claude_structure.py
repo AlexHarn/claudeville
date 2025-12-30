@@ -296,13 +296,14 @@ Required fields: social
 Optional fields: continuing (default false), action (required if continuing is false), thoughts, schedule_update
 
 === CONVERSATIONS ===
-CRITICAL: You can ONLY talk to people listed under "NEARBY PEOPLE" above!
-- If NEARBY PEOPLE shows "(no one nearby)", you CANNOT start a conversation
-- If someone you expected to see isn't listed, they are NOT here - don't pretend they are
+TALKING RANGE: You can only start conversations with people in "NEARBY PEOPLE (can talk)" - they're close enough to hear you.
+IN SIGHT: People under "IN SIGHT" are visible but too far to talk - approach them first if you want to chat.
 
-When interacting with someone in NEARBY PEOPLE:
+If no one is in talking range, you CANNOT start a conversation. You can approach someone in sight though.
+
+When talking to someone in NEARBY PEOPLE (can talk):
 - Set wants_to_talk: true
-- Set target: their EXACT name from the NEARBY PEOPLE list
+- Set target: their EXACT name from the list
 - Set conversation_line: what you actually SAY to them (dialogue in quotes)
 
 Examples:
@@ -320,7 +321,7 @@ NATURAL CONVERSATION FLOW:
 
 GROUP ADDRESSING (lectures, announcements, etc):
 - Use a list of names when speaking to multiple people: "target": ["Student1", "Student2", "Student3"]
-- All names MUST be from the NEARBY PEOPLE list
+- All names MUST be from the NEARBY PEOPLE (can talk) list
 - Any of them can respond back to you
 
 === REALITY RULES ===
@@ -405,13 +406,39 @@ def build_step_prompt(
     else:
         perception_str = "(nothing new)"
 
-    # Format nearby personas
-    if nearby_personas:
+    # Format nearby personas - split into "can talk" vs "in sight"
+    # Conversation init range is 4 tiles
+    CONVERSATION_INIT_RANGE = 4
+    close_personas = []  # Within talking range
+    distant_personas = []  # In sight but too far to talk
+
+    for item in nearby_personas:
+        # Handle both old format (name, activity) and new format (name, activity, distance)
+        if len(item) == 3:
+            name, activity, distance = item
+        else:
+            name, activity = item
+            distance = 0  # Assume close if no distance provided
+
+        if distance <= CONVERSATION_INIT_RANGE:
+            close_personas.append((name, activity))
+        else:
+            distant_personas.append((name, activity, distance))
+
+    if close_personas:
         nearby_str = "\n".join(
-            f"- {name}: {activity}" for name, activity in nearby_personas
+            f"- {name}: {activity}" for name, activity in close_personas
         )
     else:
-        nearby_str = "(no one nearby)"
+        nearby_str = "(no one within talking range)"
+
+    # Add "in sight" section if there are distant personas
+    in_sight_str = ""
+    if distant_personas:
+        in_sight_str = "\nIN SIGHT (approach to talk):\n" + "\n".join(
+            f"- {name}: {activity} (~{distance} tiles away)"
+            for name, activity, distance in distant_personas
+        )
 
     # Format accessible locations
     location_lines = []
@@ -559,8 +586,8 @@ CURRENT ACTIVITY: {current_action}{action_context}
 === PERCEPTIONS ===
 {perception_str}
 
-=== NEARBY PEOPLE ===
-{nearby_str}
+=== NEARBY PEOPLE (can talk) ===
+{nearby_str}{in_sight_str}
 
 === ACCESSIBLE LOCATIONS ===
 {location_str}

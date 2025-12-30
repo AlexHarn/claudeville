@@ -17,6 +17,12 @@ from utils import collision_block_id
 
 import cli_interface as cli
 
+# Conversation range constants
+# Must be within this range to START a conversation
+CONVERSATION_INIT_RANGE = 4
+# Messages can be delivered within this range (handles parallel movement)
+CONVERSATION_DELIVERY_RANGE = 6
+
 # Objects that personas should stand ON (sit/lie down)
 # For all other objects, personas should stand NEXT TO them
 OCCUPIABLE_OBJECTS = {
@@ -140,7 +146,7 @@ class Persona:
         """
         return perceive(self, maze)
 
-    async def move(self, maze, personas, curr_tile, curr_time):
+    async def move(self, maze, personas, personas_tile, curr_tile, curr_time):
         """
         Main cognitive function - decide what to do this simulation step.
 
@@ -169,7 +175,7 @@ class Persona:
         # Perceive environment (always needed for spatial memory updates)
         perceived_nodes = self.perceive(maze)
         perceptions = self._build_perception_strings(maze, perceived_nodes)
-        nearby_personas = self._get_nearby_personas(maze, personas)
+        nearby_personas = self._get_nearby_personas(maze, personas, personas_tile)
 
         # =====================================================================
         # SKIP LOGIC - Avoid unnecessary LLM calls
@@ -218,6 +224,10 @@ class Persona:
 
         # Check for nearby conversations we could join
         nearby_conversations = self._get_nearby_conversations(personas)
+
+        # Add encounter context if set by sequential initiative system
+        if hasattr(self, "_encounter_context") and self._encounter_context:
+            perceptions = perceptions + [self._encounter_context]
 
         step_response = await self.unified_client.step(
             perceptions=perceptions,
@@ -325,6 +335,14 @@ class Persona:
                     return None
 
                 # All nearby activity already acknowledged - continue current action
+
+            # Check if we were interrupted mid-journey (path was cleared during conversation)
+            # If so, recalculate path to resume walking to destination
+            if self._should_resume_walking(maze):
+                return self._resume_path_to_destination(
+                    maze, personas, curr_emoji, curr_action, curr_address
+                )
+
             return self._continue_current_action(curr_emoji, curr_action, curr_address)
 
         # === NEARBY PERSONAS ===
@@ -375,7 +393,7 @@ class Persona:
                 my_chat_set.add((entry[0], entry[1]))
 
         # Check each nearby persona for new dialogue
-        for name, _ in nearby_personas:
+        for name, *_ in nearby_personas:
             if name not in personas or name == self.name:
                 continue
 
@@ -428,6 +446,88 @@ class Persona:
 
         return get_persona_color(self.name)
 
+    def _should_resume_walking(self, maze) -> bool:
+        """
+        Check if we need to resume walking after a conversation interrupted us.
+
+        Returns True if:
+        - We have a destination (act_address) that's not our current location
+        - We have no path set (was cleared during conversation)
+        - We're not currently in a conversation
+        """
+        # Still in conversation, don't try to walk away
+        if self.scratch.chatting_with:
+            return False
+
+        # No path to follow
+        if self.scratch.act_path_set or self.scratch.planned_path:
+            return False
+
+        # Check if act_address indicates we should be somewhere else
+        target_address = self.scratch.act_address
+        if not target_address:
+            return False
+
+        # Skip if address suggests we're waiting or doing something in place
+        if "<waiting>" in target_address or "<random>" in target_address:
+            return False
+
+        # Check if we're already at the destination
+        curr_tile_info = maze.access_tile(self.scratch.curr_tile)
+        if curr_tile_info:
+            # Get current location's address components
+            curr_addr = curr_tile_info.get("address", "")
+            if isinstance(curr_addr, str) and target_address in curr_addr:
+                return False  # Already at destination
+
+        # We have a destination and no path - need to resume walking
+        return True
+
+    def _resume_path_to_destination(self, maze, personas, emoji, description, address):
+        """
+        Recalculate path to destination and start walking.
+
+        Called when a conversation ended mid-journey and we need to resume.
+        """
+        # Look up destination tiles from address
+        # maze.address_tiles is a dict: address -> set of tiles
+        target_tiles = maze.address_tiles.get(address)
+        if target_tiles:
+            target_tile_set = set(target_tiles)
+
+            # Collect other personas' positions to avoid
+            other_persona_tiles = set()
+            for name, persona in personas.items():
+                if name != self.name and persona.scratch.curr_tile:
+                    other_persona_tiles.add(tuple(persona.scratch.curr_tile))
+
+            # Find an unoccupied target tile
+            unoccupied = [
+                t for t in target_tile_set if tuple(t) not in other_persona_tiles
+            ]
+            target_tile = (
+                list(unoccupied)[0] if unoccupied else list(target_tile_set)[0]
+            )
+
+            # Don't walk if we're already there
+            if target_tile == self.scratch.curr_tile:
+                return self._continue_current_action(emoji, description, address)
+
+            # Create pathfinder that avoids other personas
+            pf = PathFinder(
+                maze.collision_maze, collision_block_id, other_persona_tiles
+            )
+            path = pf.find_path(self.scratch.curr_tile, target_tile)
+            if path and len(path) > 1:
+                # Set up path for walking
+                self.scratch.planned_path = path[1:]
+                self.scratch.act_path_set = True
+                next_tile = path[1]
+                return (next_tile, emoji, f"{description} @ {address}")
+
+        # Can't find path, just stay in place
+        return self._continue_current_action(emoji, description, address)
+
     # =========================================================================
     # PERCEPTION HELPERS
     # =========================================================================
@@ -457,43 +557,57 @@ class Persona:
 
         return perceptions
 
-    def _get_nearby_personas(self, maze, personas):
+    def _get_nearby_personas(self, maze, personas, personas_tile):
         """
-        Get list of (name, activity_key) tuples for nearby personas.
+        Get list of (name, activity_key, distance) tuples for nearby personas.
 
         Only includes personas that are:
         1. Within vision range (vision_r tiles)
         2. Have clear line of sight (no walls blocking)
 
-        The activity_key is (predicate, object) from the action triplet,
-        which is more stable than the full description for detecting
-        genuinely new activities vs just rephrased descriptions.
+        Uses personas_tile dict for authoritative positions (not stale maze events).
+
+        Returns:
+            List of (name, activity_key, distance) tuples where distance is
+            the Chebyshev distance (max of x/y difference) in tiles.
         """
         nearby = []
-        nearby_tiles = maze.get_nearby_tiles(
-            self.scratch.curr_tile, self.scratch.vision_r
-        )
+        my_tile = self.scratch.curr_tile
 
-        for tile in nearby_tiles:
-            # Skip tiles without line of sight (walls in the way)
-            if not maze.has_line_of_sight(self.scratch.curr_tile, tile):
+        for name, persona in personas.items():
+            if name == self.name:
                 continue
 
-            tile_details = maze.access_tile(tile)
-            if tile_details.get("events"):
-                for event in tile_details["events"]:
-                    # event is (subject, predicate, object, description)
-                    subject = event[0]
-                    # Check if this is a persona (not an object)
-                    if subject in personas and subject != self.name:
-                        # Use (predicate, object) as activity key - more stable than description
-                        predicate = event[1] if len(event) > 1 else "is"
-                        obj = event[2] if len(event) > 2 else "idle"
-                        activity_key = (predicate, obj)
-                        nearby.append((subject, activity_key))
+            # Use authoritative position from personas_tile
+            other_tile = personas_tile.get(name)
+            if not other_tile:
+                continue
 
-        # Remove duplicates
-        return list(set(nearby))
+            # Calculate Chebyshev distance
+            distance = max(
+                abs(other_tile[0] - my_tile[0]), abs(other_tile[1] - my_tile[1])
+            )
+
+            # Check if within vision range
+            if distance > self.scratch.vision_r:
+                continue
+
+            # Check line of sight
+            if not maze.has_line_of_sight(my_tile, other_tile):
+                continue
+
+            # Get activity from their scratch (current action)
+            act_event = persona.scratch.act_event
+            if act_event and len(act_event) >= 3:
+                predicate = act_event[1] if act_event[1] else "is"
+                obj = act_event[2] if act_event[2] else "idle"
+            else:
+                predicate = "is"
+                obj = "idle"
+            activity_key = (predicate, obj)
+            nearby.append((name, activity_key, distance))
+
+        return nearby
 
     def _get_nearby_conversations(self, personas) -> list[dict]:
         """
@@ -691,7 +805,7 @@ class Persona:
         # Validate social target is actually nearby
         nearby_names = set()
         if nearby_personas:
-            nearby_names = {name for name, _ in nearby_personas}
+            nearby_names = {name for name, *_ in nearby_personas}
 
         # Process social decisions - build chat data if conversation is happening
         chatting_with = None
@@ -989,20 +1103,24 @@ class Persona:
         if len(target_tiles) > 4:
             target_tiles = random.sample(target_tiles, 4)
 
-        # Avoid tiles occupied by other personas
-        persona_names = set(personas.keys())
-        unoccupied_tiles = []
-        for tile in target_tiles:
-            tile_events = maze.access_tile(tile).get("events", [])
-            occupied = any(event[0] in persona_names for event in tile_events)
-            if not occupied:
-                unoccupied_tiles.append(tile)
+        # Collect other personas' current positions to avoid
+        other_persona_tiles = set()
+        for name, persona in personas.items():
+            if name != self.name and persona.scratch.curr_tile:
+                other_persona_tiles.add(tuple(persona.scratch.curr_tile))
 
+        # Filter out tiles occupied by other personas
+        unoccupied_tiles = [
+            t for t in target_tiles if tuple(t) not in other_persona_tiles
+        ]
         if unoccupied_tiles:
             target_tiles = unoccupied_tiles
 
-        # Create pathfinder with extra blocked tiles for non-occupiable objects
-        path_finder = PathFinder(maze.collision_maze, collision_block_id, extra_blocked)
+        # Add other personas as blocked tiles so we don't path through them
+        all_blocked = extra_blocked | other_persona_tiles
+
+        # Create pathfinder with extra blocked tiles
+        path_finder = PathFinder(maze.collision_maze, collision_block_id, all_blocked)
 
         # Find path to nearest target tile
         path, closest_tile = path_finder.find_path_to_nearest(
@@ -1054,7 +1172,7 @@ class Persona:
         # Validate social target is actually nearby
         nearby_names = set()
         if nearby_personas:
-            nearby_names = {name for name, _ in nearby_personas}
+            nearby_names = {name for name, *_ in nearby_personas}
 
         # Normalize target to a list for uniform handling
         targets = []

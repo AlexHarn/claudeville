@@ -15,7 +15,8 @@ class Scratch:
     def __init__(self, f_saved):
         # PERSONA HYPERPARAMETERS
         # <vision_r> denotes the number of tiles that the persona can see around them.
-        self.vision_r = 4
+        # Note: Conversation init range is 4 tiles, delivery range is 6 tiles.
+        self.vision_r = 8
         # <att_bandwidth> attention bandwidth for perception filtering
         self.att_bandwidth = 3
         # <retention> memory retention factor for perception

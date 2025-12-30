@@ -460,8 +460,34 @@ class ReverieServer:
                 )
                 self.maze.remove_event_from_tile(blank, new_tile)
 
-        # Run cognitive pipeline for all personas in parallel
+        # Run cognitive pipeline for all personas
         movements = {"persona": {}, "meta": {}}
+
+        # SEQUENTIAL INITIATIVE SYSTEM
+        # For new encounters (two personas seeing each other for first time),
+        # we run them sequentially to avoid both greeting simultaneously.
+        # Initiative is determined by: alphabetical order, flipped on odd steps.
+        new_encounter_pairs = self._detect_new_encounters()
+        handled_personas = set()  # Personas already processed via sequential initiative
+
+        if new_encounter_pairs:
+            sequential_results = _run_async(
+                self._run_sequential_encounters(new_encounter_pairs)
+            )
+            for result in sequential_results:
+                if isinstance(result, Exception):
+                    cli.print_error(f"Sequential encounter failed: {result}")
+                    continue
+                name, next_tile, pronunciatio, description, chat, had_llm_call = result
+                movements["persona"][name] = {
+                    "movement": next_tile,
+                    "pronunciatio": pronunciatio,
+                    "description": description,
+                    "chat": chat,
+                    "had_action": had_llm_call,
+                }
+                self.personas_tile[name] = next_tile
+                handled_personas.add(name)
 
         async def run_persona_move(name, persona):
             """Run a single persona's move asynchronously."""
@@ -473,6 +499,7 @@ class ReverieServer:
             ) = await persona.move(
                 self.maze,
                 self.personas,
+                self.personas_tile,
                 self.personas_tile[name],
                 self.curr_time,
             )
@@ -485,18 +512,18 @@ class ReverieServer:
                 had_llm_call,
             )
 
-        async def run_all_personas():
-            """Run all personas in parallel using asyncio.gather."""
+        async def run_remaining_personas():
+            """Run remaining personas (not handled by sequential initiative) in parallel."""
             tasks = [
                 run_persona_move(name, persona)
                 for name, persona in self.personas.items()
+                if name not in handled_personas
             ]
             return await asyncio.gather(*tasks, return_exceptions=True)
 
-        # Run all persona moves in parallel using the shared event loop
-        # This ensures Flask thread uses the same loop as Claude SDK clients
+        # Run remaining persona moves in parallel
         try:
-            results = _run_async(run_all_personas())
+            results = _run_async(run_remaining_personas())
             # Check for exceptions in results
             for r in results:
                 if isinstance(r, Exception):
@@ -588,6 +615,203 @@ class ReverieServer:
             self._pending_movements.append(movements)
 
         return movements
+
+    def _detect_new_encounters(self) -> list[tuple[str, str]]:
+        """
+        Detect pairs of personas who are seeing each other for the first time.
+
+        A "new encounter" is when:
+        1. Both personas are within vision range of each other
+        2. Neither has acknowledged the other yet (not in _acknowledged_nearby)
+        3. Neither is already in a conversation
+
+        Returns:
+            List of (persona_a, persona_b) tuples representing new encounter pairs.
+        """
+        new_encounters = []
+        checked_pairs = set()
+
+        # Iterate over all persona pairs directly using authoritative positions
+        persona_names = list(self.personas.keys())
+        for i, name_a in enumerate(persona_names):
+            persona_a = self.personas[name_a]
+
+            # Skip if already in conversation
+            if persona_a.scratch.chatting_with:
+                continue
+
+            tile_a = self.personas_tile.get(name_a)
+            if not tile_a:
+                continue
+
+            for name_b in persona_names[i + 1 :]:
+                persona_b = self.personas[name_b]
+
+                # Skip if B is already in conversation
+                if persona_b.scratch.chatting_with:
+                    continue
+
+                tile_b = self.personas_tile.get(name_b)
+                if not tile_b:
+                    continue
+
+                # Check distance (Chebyshev)
+                dist = max(abs(tile_a[0] - tile_b[0]), abs(tile_a[1] - tile_b[1]))
+                if dist > persona_a.scratch.vision_r:
+                    continue
+
+                # Check line of sight
+                if not self.maze.has_line_of_sight(tile_a, tile_b):
+                    continue
+
+                # Create sorted pair to avoid duplicates
+                pair = tuple(sorted([name_a, name_b]))
+                if pair in checked_pairs:
+                    continue
+                checked_pairs.add(pair)
+
+                # Check if this is a NEW encounter for BOTH personas
+                # (neither has acknowledged the other yet)
+                a_knows_b = any(n == name_b for n, _ in persona_a._acknowledged_nearby)
+                b_knows_a = any(n == name_a for n, _ in persona_b._acknowledged_nearby)
+
+                if not a_knows_b and not b_knows_a:
+                    # Debug: log the encounter detection with positions
+                    cli.print_info(
+                        f"  [DEBUG] New encounter detected: {name_a} @ {tile_a} <-> "
+                        f"{name_b} @ {tile_b} (dist: {dist}, LOS: checked)"
+                    )
+                    new_encounters.append(pair)
+
+        return new_encounters
+
+    async def _run_sequential_encounters(
+        self, encounter_pairs: list[tuple[str, str]]
+    ) -> list:
+        """
+        Run new encounters sequentially with initiative system.
+
+        For each pair:
+        1. Determine who has initiative (alphabetical, flipped on odd steps)
+        2. Run initiative holder's move first
+        3. If they didn't initiate conversation, run the other with context
+        4. If they did initiate, the other will respond naturally next step
+
+        Returns:
+            List of move results for all personas in encounter pairs.
+        """
+        results = []
+
+        for pair in encounter_pairs:
+            name_a, name_b = pair  # Already sorted alphabetically
+
+            # Flip initiative on odd steps so it's not always the same person
+            if self.step % 2 == 0:
+                first, second = name_a, name_b
+            else:
+                first, second = name_b, name_a
+
+            cli.print_info(f"  New encounter: {first} has initiative over {second}")
+
+            # Run first persona's move
+            persona_first = self.personas[first]
+            try:
+                (
+                    next_tile,
+                    pronunciatio,
+                    description,
+                    had_llm_call,
+                ) = await persona_first.move(
+                    self.maze,
+                    self.personas,
+                    self.personas_tile,
+                    self.personas_tile[first],
+                    self.curr_time,
+                )
+                results.append(
+                    (
+                        first,
+                        next_tile,
+                        pronunciatio,
+                        description,
+                        persona_first.scratch.chat,
+                        had_llm_call,
+                    )
+                )
+
+                # Check if first persona initiated conversation with second
+                first_initiated = (
+                    persona_first.scratch.chatting_with == second
+                    and persona_first.scratch.chat
+                )
+
+                if first_initiated:
+                    # First initiated - DON'T run second's move this step
+                    # Second will respond naturally on the NEXT step when they
+                    # detect the unheard dialogue via _has_unheard_dialogue
+                    cli.print_info(
+                        f"    {first} initiated → {second} will respond next step"
+                    )
+                    # Mark second as handled so they don't run in parallel execution
+                    # But don't add a result - they'll run normally next step
+                    # We need to add them to handled_personas via a different mechanism
+                    # For now, add a placeholder result that keeps them in place
+                    persona_second = self.personas[second]
+                    results.append(
+                        (
+                            second,
+                            self.personas_tile[second],  # Stay in place
+                            persona_second.scratch.act_pronunciatio or "💭",
+                            persona_second.scratch.act_description
+                            or f"{second} is idle",
+                            persona_second.scratch.chat,
+                            False,  # No LLM call
+                        )
+                    )
+                else:
+                    # First declined - give second the knowledge and let them decide
+                    # Add context that first saw them but didn't initiate
+                    persona_second = self.personas[second]
+                    persona_second._encounter_context = (
+                        f"{first} noticed you but didn't start a conversation"
+                    )
+
+                    # Run second persona's move
+                    (
+                        next_tile_2,
+                        pronunciatio_2,
+                        description_2,
+                        had_llm_call_2,
+                    ) = await persona_second.move(
+                        self.maze,
+                        self.personas,
+                        self.personas_tile,
+                        self.personas_tile[second],
+                        self.curr_time,
+                    )
+                    results.append(
+                        (
+                            second,
+                            next_tile_2,
+                            pronunciatio_2,
+                            description_2,
+                            persona_second.scratch.chat,
+                            had_llm_call_2,
+                        )
+                    )
+
+                    # Clear the encounter context
+                    if hasattr(persona_second, "_encounter_context"):
+                        delattr(persona_second, "_encounter_context")
+
+            except Exception as e:
+                cli.print_error(f"Error in sequential encounter {pair}: {e}")
+                import traceback
+
+                traceback.print_exc()
+                results.append(e)
+
+        return results
 
     def _synchronize_conversations(self):
         """
@@ -686,14 +910,16 @@ class ReverieServer:
                 )
 
         # Detect mutual encounters (both greeted each other on same step)
-        # This is fine - we'll merge their messages into one conversation
+        # This indicates the sequential initiative system didn't prevent it
+        # (could happen if both were already in motion or edge cases)
+        # Just log it - both lines will be merged and conversation continues normally
         mutual_encounters = set()
         for name, (partner, _) in active_chatters.items():
             if partner in active_chatters and active_chatters[partner][0] == name:
                 pair = tuple(sorted([name, partner]))
                 if pair not in mutual_encounters:
                     mutual_encounters.add(pair)
-                    cli.print_info(f"  Mutual encounter: {name} <-> {partner}")
+                    cli.print_info(f"  Mutual greeting: {name} <-> {partner}")
 
         # Step 3: Find or create conversation groups (with proximity validation)
         for name, (partner, chat_lines) in active_chatters.items():

@@ -328,12 +328,39 @@ class Maze:
                 nearby_tiles += [(i, j)]
         return nearby_tiles
 
+    def _is_wall(self, x, y):
+        """
+        Check if a tile is a wall (blocks line of sight).
+
+        Distinguishes between actual walls and furniture/counters:
+        - Tiles with collision=True AND empty arena are walls (outer walls)
+        - Tiles with collision=True BUT inside an arena are furniture (counters, tables)
+        - Furniture blocks pathing but NOT line of sight
+
+        INPUT:
+          x, y: Tile coordinates
+        OUTPUT:
+          True if tile is an opaque wall, False otherwise
+        """
+        if not (0 <= y < self.maze_height and 0 <= x < self.maze_width):
+            return True  # Out of bounds = wall
+
+        tile = self.tiles[y][x]
+        if not tile.get("collision"):
+            return False  # Not a collision tile at all
+
+        # Collision tile - check if it's inside an arena (furniture) or outside (wall)
+        # Tiles with an arena set are inside a room = furniture/counter
+        # Tiles with empty arena are outside walls
+        arena = tile.get("arena", "")
+        return arena == ""  # Empty arena = wall, non-empty = furniture
+
     def has_line_of_sight(self, tile1, tile2):
         """
         Check if there's a clear line of sight between two tiles (no walls).
 
-        Uses Bresenham's line algorithm to trace tiles between the two points
-        and checks if any of them are collision tiles (walls).
+        Uses Bresenham's line algorithm to trace tiles between the two points.
+        Only actual walls block sight - furniture/counters inside arenas do not.
 
         INPUT:
           tile1: First tile coordinate (x, y)
@@ -352,12 +379,8 @@ class Maze:
 
         x, y = x1, y1
         while True:
-            # Check if current tile is within bounds and not a wall
-            if 0 <= y < self.maze_height and 0 <= x < self.maze_width:
-                if self.tiles[y][x]["collision"]:
-                    return False
-            else:
-                # Out of bounds - treat as blocked
+            # Check if current tile is a wall (not furniture)
+            if self._is_wall(x, y):
                 return False
 
             # Reached destination
